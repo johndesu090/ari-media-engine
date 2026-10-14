@@ -85,7 +85,7 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 
 	s.flv = flv.NewWriter(io.MultiWriter(writers...))
 	m.sessions[streamKey] = s
-	m.log.Info("transcode session started", "stream", streamKey, "renditions", len(m.cfg.Renditions), "formats", formatNames(formats))
+	m.log.Info("transcode session started", "stream", streamKey, "dir", outDir, "renditions", len(m.cfg.Renditions), "formats", formatNames(formats))
 	return s, nil
 }
 
@@ -203,7 +203,7 @@ func (s *Session) Close() {
 
 	for _, p := range procs {
 		if p.stderr != nil && p.stderr.Len() > 0 {
-			s.log.Debug("ffmpeg exited", "stderr", p.stderr.String())
+			s.log.Warn("ffmpeg exited", "stream", s.streamKey, "stderr", p.stderr.String())
 		}
 	}
 	s.log.Info("transcode session stopped", "stream", s.streamKey)
