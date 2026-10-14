@@ -111,6 +111,8 @@ type IngestConfig struct {
 type IngestProtocol struct {
 	Enabled bool `yaml:"enabled"`
 	Port    int  `yaml:"port"`
+	// Sources are RTSP pull URLs to start at boot ("url" or "streamId=url").
+	Sources []string `yaml:"sources"`
 }
 
 // HLSConfig controls HLS/DASH packaging.
@@ -323,6 +325,7 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Player.HLSJSURL, "ARI_PLAYER_HLS_JS_URL")
 	setBool(&cfg.Audio.Enabled, "ARI_AUDIO_ENABLED")
 	setString(&cfg.Audio.Bitrate, "ARI_AUDIO_BITRATE")
+	setStringSlice(&cfg.Ingest.RTSP.Sources, "ARI_RTSP_SOURCES")
 }
 
 func setStringSlice(dst *[]string, key string) {

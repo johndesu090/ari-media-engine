@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/johndesu090/ari-media-engine/internal/api"
@@ -21,6 +24,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
 	"github.com/johndesu090/ari-media-engine/internal/ingest"
 	"github.com/johndesu090/ari-media-engine/internal/ingest/rtmp"
+	"github.com/johndesu090/ari-media-engine/internal/ingest/rtsp"
 	"github.com/johndesu090/ari-media-engine/internal/p2p"
 	"github.com/johndesu090/ari-media-engine/internal/player"
 	"github.com/johndesu090/ari-media-engine/internal/recorder"
@@ -48,6 +52,7 @@ type Server struct {
 	recorder    *recorder.Manager
 	objectStore storage.Store
 	audio       *audio.Manager
+	rtsp        *rtsp.Manager
 
 	http *http.Server
 }
@@ -274,6 +279,12 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	p2pHub := p2p.NewHub(log, nil, cfg.P2P.MaxPeers)
 	p2pHub.SetEnabled(cfg.P2P.Enabled)
 
+	// RTSP pull manager (sources from config and the API).
+	rtspMgr := rtsp.NewManager(engine, log, rtsp.Hooks{
+		OnPublish:   func(id string) { upsertStream(store, id, broadcast.StatusLive) },
+		OnUnpublish: func(id string) { upsertStream(store, id, broadcast.StatusEnded) },
+	})
+
 	apiSrv := api.New(api.Options{
 		Store:      store,
 		Engine:     engine,
@@ -292,6 +303,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		DashBase: cfg.Player.DashBase,
 		Cluster:  clusterMgr,
 		P2P:      p2pHub,
+		RTSP:     rtspMgr,
 	})
 
 	root := http.NewServeMux()
@@ -353,6 +365,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		recorder:    rec,
 		objectStore: objectStore,
 		audio:       audioMgr,
+		rtsp:        rtspMgr,
 		rtmpHandler: ingest.NewRTMPHandler(ingest.RTMPOptions{
 			Engine: engine,
 			Logger: log,
@@ -391,6 +404,15 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.cluster != nil {
 		if err := s.cluster.Start(ctx); err != nil {
 			return err
+		}
+	}
+	for _, src := range s.cfg.Ingest.RTSP.Sources {
+		streamID, rawURL := parseRTSPSource(src)
+		if streamID == "" {
+			continue
+		}
+		if err := s.rtsp.Start(streamID, rawURL); err != nil {
+			s.log.Warn("rtsp source start failed", "source", src, "err", err)
 		}
 	}
 
@@ -453,6 +475,9 @@ func (s *Server) shutdown() {
 	if s.audio != nil {
 		s.audio.StopAll()
 	}
+	if s.rtsp != nil {
+		s.rtsp.StopAll()
+	}
 	if s.objectStore != nil {
 		_ = s.objectStore.Close()
 	}
@@ -480,6 +505,24 @@ func registerDashboard(mux *http.ServeMux, dir string) {
 		return
 	}
 	mux.Handle("GET /", http.FileServer(http.Dir(dir)))
+}
+
+// parseRTSPSource parses an RTSP source entry: "streamId=url" or a bare URL
+// (whose stream id is derived from the last path segment).
+func parseRTSPSource(entry string) (string, string) {
+	entry = strings.TrimSpace(entry)
+	if i := strings.IndexByte(entry, '='); i > 0 {
+		return strings.TrimSpace(entry[:i]), strings.TrimSpace(entry[i+1:])
+	}
+	u, err := url.Parse(entry)
+	if err != nil {
+		return "", entry
+	}
+	name := path.Base(u.Path)
+	if name == "" || name == "." || name == "/" {
+		name = id.New("rtsp")
+	}
+	return name, entry
 }
 
 // upsertStream creates or updates the control-plane record for an ingest stream

@@ -52,6 +52,8 @@ ingest:
   rtsp:
     enabled: false
     port: 8554
+    # RTSP pull sources started at boot: "url" or "streamId=url".
+    sources: []
 
 hls:
   enabled: true

@@ -34,6 +34,7 @@ type IngestSession struct {
 	ts     uint32
 	closed bool
 
+	videoAU      atomic.Uint64
 	audioPackets atomic.Uint64
 }
 
@@ -90,6 +91,7 @@ func (s *IngestSession) WriteVideo(nalus [][]byte, ptsMillis uint32, keyframe bo
 		return nil
 	}
 	s.ts = ptsMillis * 90 // 90 kHz H.264 clock
+	s.videoAU.Add(1)
 
 	var packets []*rtp.Packet
 	if keyframe && len(s.sps) > 0 && len(s.pps) > 0 {
@@ -149,6 +151,9 @@ func (s *IngestSession) WriteAudioRTP(pkt *rtp.Packet) error {
 
 // AudioPackets returns the number of Opus RTP packets forwarded to subscribers.
 func (s *IngestSession) AudioPackets() uint64 { return s.audioPackets.Load() }
+
+// VideoAccessUnits returns the number of H.264 access units written.
+func (s *IngestSession) VideoAccessUnits() uint64 { return s.videoAU.Load() }
 
 // Close ends the ingest session and tears down its track.
 func (s *IngestSession) Close() {

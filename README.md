@@ -6,7 +6,7 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery over trickle ICE.
 - **Simulcast:** accepts a publisher's RID layers and forwards the preferred layer to subscribers.
 - **Peer-assisted delivery (P2P):** HLS/DASH viewers share segments over WebRTC data channels, with CDN fallback.
-- **Multi-protocol ingest:** WebRTC publish, plus RTMP ingest (H.264 video + AAC→Opus audio) and SRT / RTSP listeners.
+- **Multi-protocol ingest:** WebRTC publish, RTMP ingest (H.264 video + AAC→Opus audio), and RTSP pull (H.264) with SRT listeners.
 - **Multi-protocol playback:** WebRTC first, with HLS / DASH fallback.
 - **Per-stream delivery modes:** WebRTC-only, HLS-only, DASH-only or all, switchable from the dashboard or API.
 - **Signed playback tokens:** HMAC tokenization for HLS/DASH, toggleable at runtime from the dashboard.
@@ -26,9 +26,9 @@ mirrors and extends the core enterprise features of Ant Media Server.
 > optionally transcoded into an HLS/DASH ABR ladder served at
 > `/hls/<streamID>/index.m3u8` and `/dash/<streamID>/manifest.mpd`, and
 > optionally recorded. With `audio.enabled`, RTMP AAC audio is transcoded to
-> Opus so WebRTC subscribers receive audio. SRT/RTSP demuxing remains scaffolded
-> with clear extension points (see
-> [`docs/architecture.md`](docs/architecture.md)).
+> Opus so WebRTC subscribers receive audio. RTSP sources can be pulled
+> (`ingest.rtsp.sources` or the API) into a WebRTC stream. SRT demuxing remains
+> scaffolded (see [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -101,6 +101,7 @@ overrides. Highlights:
 | `p2p.max_peers`                      | `ARI_P2P_MAX_PEERS`                | Peers offered per join |
 | `audio.enabled`                      | `ARI_AUDIO_ENABLED`                | Transcode RTMP AAC → Opus for WebRTC |
 | `audio.bitrate`                      | `ARI_AUDIO_BITRATE`                | Opus bitrate (default `96k`) |
+| `ingest.rtsp.sources`                | `ARI_RTSP_SOURCES`                 | RTSP pull sources (`url` or `streamId=url`) |
 | `auth.enabled` / `auth.api_key`      | `ARI_AUTH_ENABLED`/`ARI_API_KEY`   | API key protection for control-plane routes |
 | `cluster.enabled`                    | `ARI_CLUSTER_ENABLED`              | Join a Redis-backed cluster |
 | `cluster.redis_url`                  | `ARI_REDIS_URL`                    | Redis connection URL |
@@ -356,6 +357,31 @@ curl -X PUT http://localhost:8080/api/v1/p2p -H 'Content-Type: application/json'
 To use P2P for HLS in non-Safari browsers, set `player.hls_js_url` (and
 `player.dash_js_url` for DASH) so the player loads the corresponding library.
 
+## RTSP pull ingest
+
+Pull an RTSP source (e.g. an IP camera) into a WebRTC stream, at boot or via the
+API:
+
+```yaml
+ingest:
+  rtsp:
+    sources:
+      - "demo=rtsp://192.168.1.50:554/stream1"   # streamId=url
+      - "rtsp://cam.example/live"                # id derived from the path
+```
+
+```bash
+curl -X POST http://localhost:8080/api/v1/rtsp/pull \
+  -H 'Content-Type: application/json' \
+  -d '{"streamId":"cam1","url":"rtsp://192.168.1.50:554/stream1"}'
+curl http://localhost:8080/api/v1/rtsp/pull
+curl -X DELETE http://localhost:8080/api/v1/rtsp/pull/cam1
+```
+
+The puller uses TCP-interleaved RTP, depacketizes H.264 (single NAL / STAP-A /
+FU-A), and re-packetizes it for WebRTC subscribers. SPS/PPS come from the SDP
+`fmtp` (or in-band), and the session reconnects automatically with backoff.
+
 ## REST API
 
 | Method | Path                                        | Description |
@@ -367,6 +393,9 @@ To use P2P for HLS in non-Safari browsers, set `player.hls_js_url` (and
 | DELETE | `/api/v1/recordings/{key...}`               | Delete a recording |
 | GET    | `/api/v1/p2p`                               | P2P tracker status |
 | PUT    | `/api/v1/p2p`                               | Enable/disable P2P |
+| GET    | `/api/v1/rtsp/pull`                         | List RTSP pulls |
+| POST   | `/api/v1/rtsp/pull`                         | Start an RTSP pull |
+| DELETE | `/api/v1/rtsp/pull/{streamId}`              | Stop an RTSP pull |
 | GET    | `/api/v1/streams`                           | List streams |
 | POST   | `/api/v1/streams`                           | Create a stream |
 | GET    | `/api/v1/streams/{id}`                      | Get a stream |
@@ -389,7 +418,7 @@ When `auth.enabled` is true, send `X-API-Key: <key>` or
 ```
 cmd/server (cmd/ari)   Main entry point
 internal/signaling     WebRTC signaling (WebSocket JSON protocol)
-internal/ingest        RTMP demux (FLV → H.264) + SRT/RTSP listeners
+internal/ingest        RTMP demux (FLV → H.264) + RTSP pull + SRT listener
 internal/audio         AAC→Opus audio transcode for WebRTC
 internal/webrtc        Pion-based SFU
 internal/transcode     FFmpeg ABR → HLS ladder

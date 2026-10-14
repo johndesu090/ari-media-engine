@@ -38,6 +38,7 @@ for the remaining enterprise features.
 | `internal/signaling` | WebSocket JSON signaling driving the SFU |
 | `internal/ingest`    | RTMP demux (handshake, chunks, AMF0, FLV → H.264) and SRT/RTSP listeners |
 | `internal/audio`     | AAC→Opus transcode (FFmpeg → Opus RTP) for WebRTC subscribers |
+| `internal/ingest/rtsp` | RTSP pull client: SDP, H.264 depacketizer, reconnect manager |
 | `internal/delivery`  | Embedding security: domain allow-list + CSP `frame-ancestors` + origin guard |
 | `internal/player`    | Embedded HTML5 player page and assets |
 | `internal/api`       | REST control plane (streams, security, stats) |
@@ -104,7 +105,21 @@ available; per-subscriber layer switching is a follow-up.
 Publish lifecycle (`OnPublish`/`OnUnpublish`) updates the control-plane
 `Broadcast` record, so RTMP streams appear in the REST API and dashboard.
 
-Remaining in this track: SRT and RTSP demuxing.
+Remaining in this track: SRT demuxing.
+
+## RTSP pull ingest
+
+`internal/ingest/rtsp` connects to an RTSP source and pulls H.264 into the SFU.
+The client performs OPTIONS/DESCRIBE/SETUP/PLAY over one TCP connection using
+interleaved RTP (RFC 2326 §10.12), keeping the session alive with periodic
+OPTIONS. A small SDP parser extracts the H.264 payload type, clock rate, control
+URL and `sprop-parameter-sets`; an RFC 6184 depacketizer reassembles single NAL
+units, STAP-A aggregates and FU-A fragments into access units (grouped by the
+RTP marker bit) which are written to the ingest session's video track. The
+manager keys sessions by stream id, retries with a 3s backoff, and notifies the
+control plane via `OnPublish`/`OnUnpublish` so RTSP streams appear in the API.
+
+Sources come from `ingest.rtsp.sources` or `POST /api/v1/rtsp/pull`.
 
 ## Audio path
 
@@ -247,7 +262,7 @@ path never needs to change.
 | WebRTC SFU + signaling | ✅ MVP | Trickle ICE, RTP forwarding, simulcast reception |
 | Embed security + player | ✅ MVP | CSP + origin guard + embedded assets |
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
-| RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264 + AAC→Opus works end-to-end; SRT/RTSP pending |
+| RTMP/SRT/RTSP media demux | 🟡 RTMP + RTSP | RTMP FLV→H.264 + AAC→Opus and RTSP pull (H.264) work; SRT pending |
 | ABR transcoding | ✅ MVP | FFmpeg FLV→HLS ladder, auto start/stop on publish |
 | HLS/DASH packaging | ✅ MVP | HLS master+variants and DASH MPD produced by the ABR pipeline (video-only) |
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |

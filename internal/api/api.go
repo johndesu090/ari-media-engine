@@ -15,6 +15,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
+	"github.com/johndesu090/ari-media-engine/internal/ingest/rtsp"
 	"github.com/johndesu090/ari-media-engine/internal/p2p"
 	"github.com/johndesu090/ari-media-engine/internal/storage"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
@@ -39,6 +40,7 @@ type Options struct {
 	Recordings   storage.Store
 	RecordActive func() int
 	P2P          *p2p.Hub
+	RTSP         *rtsp.Manager
 }
 
 // Server exposes the REST API.
@@ -58,6 +60,7 @@ type Server struct {
 	recordings   storage.Store
 	recordActive func() int
 	p2p          *p2p.Hub
+	rtsp         *rtsp.Manager
 }
 
 // New constructs the API server.
@@ -86,6 +89,7 @@ func New(opts Options) *Server {
 		recordings:   opts.Recordings,
 		recordActive: opts.RecordActive,
 		p2p:          opts.P2P,
+		rtsp:         opts.RTSP,
 	}
 }
 
@@ -109,6 +113,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/recordings/{key...}", protect(s.handleDeleteRecording))
 	mux.Handle("GET /api/v1/p2p", protect(s.handleGetP2P))
 	mux.Handle("PUT /api/v1/p2p", protect(s.handlePutP2P))
+	mux.Handle("GET /api/v1/rtsp/pull", protect(s.handleListRTSP))
+	mux.Handle("POST /api/v1/rtsp/pull", protect(s.handleStartRTSP))
+	mux.Handle("DELETE /api/v1/rtsp/pull/{streamId}", protect(s.handleStopRTSP))
 
 	mux.Handle("GET /api/v1/streams", protect(s.handleListStreams))
 	mux.Handle("POST /api/v1/streams", protect(s.handleCreateStream))
@@ -196,6 +203,52 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 		payload["p2pPeers"] = s.p2p.PeerCount()
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleListRTSP lists active RTSP pull sessions.
+func (s *Server) handleListRTSP(w http.ResponseWriter, _ *http.Request) {
+	if s.rtsp == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "pulls": []any{}})
+		return
+	}
+	pulls := s.rtsp.List()
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "count": len(pulls), "pulls": pulls})
+}
+
+// handleStartRTSP begins pulling an RTSP source.
+func (s *Server) handleStartRTSP(w http.ResponseWriter, r *http.Request) {
+	if s.rtsp == nil {
+		writeError(w, http.StatusServiceUnavailable, "rtsp_unavailable", "rtsp pull is not configured")
+		return
+	}
+	var req struct {
+		StreamID string `json:"streamId"`
+		URL      string `json:"url"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if err := s.rtsp.Start(strings.TrimSpace(req.StreamID), strings.TrimSpace(req.URL)); err != nil {
+		writeError(w, http.StatusBadRequest, "rtsp_start_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"streamId": req.StreamID, "url": req.URL})
+}
+
+// handleStopRTSP ends an RTSP pull session.
+func (s *Server) handleStopRTSP(w http.ResponseWriter, r *http.Request) {
+	if s.rtsp == nil {
+		writeError(w, http.StatusServiceUnavailable, "rtsp_unavailable", "rtsp pull is not configured")
+		return
+	}
+	streamID := r.PathValue("streamId")
+	if streamID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_stream", "streamId is required")
+		return
+	}
+	s.rtsp.Stop(streamID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGetP2P reports the peer-assisted delivery tracker status.
