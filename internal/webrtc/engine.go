@@ -72,6 +72,8 @@ type Config struct {
 	MaxSubscribers int
 	// ICEServers are STUN/TURN servers used when gathering candidates.
 	ICEServers []pion.ICEServer
+	// ICETCPOnly restricts ICE gathering to TCP candidates (ICE-TCP).
+	ICETCPOnly bool
 }
 
 // Engine owns every stream and PeerConnection in the process.
@@ -109,6 +111,11 @@ func NewEngine(cfg Config, log *slog.Logger) (*Engine, error) {
 		mux := ice.NewTCPMuxDefault(ice.TCPMuxParams{Listener: ln})
 		settings.SetICETCPMux(mux)
 		tcpMux = mux
+	}
+
+	if cfg.ICETCPOnly {
+		// Gather only TCP candidates so media works when UDP is blocked.
+		settings.SetNetworkTypes([]pion.NetworkType{pion.NetworkTypeTCP4, pion.NetworkTypeTCP6})
 	}
 
 	if len(cfg.ICEPublicIPs) > 0 {

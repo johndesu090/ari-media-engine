@@ -80,6 +80,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		EnableLoopback: cfg.WebRTC.EnableLoopback,
 		MaxSubscribers: cfg.WebRTC.MaxSubscribers,
 		ICEServers:     toICEServers(cfg.WebRTC.ICEServers),
+		ICETCPOnly:     cfg.WebRTC.ICETransport == "tcp",
 	}, log)
 	if err != nil {
 		return nil, fmt.Errorf("server: webrtc engine: %w", err)
@@ -369,7 +370,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	// Management dashboard (static assets), gated by the dashboard login.
 	root.Handle("GET /", dashboardGuard(cfg.Auth, sessions, dashboardHandler(cfg.Server.DashboardDir)))
 
-	handler := delivery.SecurityHeaders()(root)
+	handler := delivery.SecurityHeaders(!cfg.Security.CSPPlayerOnly)(root)
 
 	return &Server{
 		cfg:         cfg,

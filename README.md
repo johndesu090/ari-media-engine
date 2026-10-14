@@ -139,6 +139,9 @@ overrides. Highlights:
 | `security.allow_all_embed`           | `ARI_SECURITY_ALLOW_ALL_EMBED`     | Permit framing on any domain |
 | `security.allowed_domains`           | `ARI_SECURITY_ALLOWED_DOMAINS`     | Comma-separated global allow-list |
 | `security.enforce_origin`            | `ARI_SECURITY_ENFORCE_ORIGIN`      | Reject non-allow-listed `Origin`/`Referer` server-side |
+| `security.csp_player_only`           | `ARI_SECURITY_CSP_PLAYER_ONLY`     | Apply the CSP to the player page only |
+| `webrtc.ice_transport`               | `ARI_ICE_TRANSPORT`                | `all` (UDP+TCP) or `tcp` (ICE-TCP only) |
+| `webrtc.ice_servers`                 | `ARI_ICE_SERVERS`                  | STUN/TURN servers (public ICE) |
 | `player.title`                       | `ARI_PLAYER_TITLE`                 | Player/dashboard title |
 | `webhooks.enabled` / `webhooks.urls` | `ARI_WEBHOOKS_ENABLED`/`_URLS`     | Stream lifecycle webhooks |
 | `transcode.enabled`                  | `ARI_TRANSCODE_ENABLED`            | Enable the FFmpeg ABR → HLS pipeline |

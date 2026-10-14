@@ -29,6 +29,9 @@ webrtc:
   #     username: user
   #     credential: pass
   ice_servers: []
+  # "all" (UDP + TCP, default) or "tcp" (ICE-TCP only, when UDP is blocked).
+  # Note: ICE-TCP still advertises the server's public IP to clients.
+  ice_transport: all
 
 log:
   level: info
@@ -92,6 +95,8 @@ security:
     - example.com
     - "*.trusted-partner.net"
   enforce_origin: true
+  # Apply the Content-Security-Policy to the player page only (not the dashboard/API).
+  csp_player_only: false
 
 player:
   title: Ari Media Engine

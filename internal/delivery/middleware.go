@@ -49,19 +49,33 @@ func (g EmbedGuard) Middleware(next http.Handler) http.Handler {
 }
 
 // SecurityHeaders returns middleware that applies baseline security headers to
-// non-embeddable responses (API, dashboard, static assets). Framing is denied
-// unless the caller overrides the frame-ancestors source elsewhere.
-func SecurityHeaders() func(http.Handler) http.Handler {
+// non-embeddable responses (API, dashboard, static assets). When includeCSP is
+// false only the baseline headers are set (no Content-Security-Policy), which is
+// useful when the CSP should apply to the player page alone.
+func SecurityHeaders(includeCSP bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ApplySecurityHeaders(w.Header(), "'none'")
+			if includeCSP {
+				ApplySecurityHeaders(w.Header(), "'none'")
+			} else {
+				ApplyBaselineHeaders(w.Header())
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-// ApplySecurityHeaders writes the engine's standard hardening headers. The
-// frameAncestors argument is the CSP frame-ancestors source list.
+// ApplyBaselineHeaders writes the hardening headers that do not depend on the
+// frame-ancestors policy.
+func ApplyBaselineHeaders(h http.Header) {
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+}
+
+// ApplySecurityHeaders writes the engine's standard hardening headers plus the
+// Content-Security-Policy. The frameAncestors argument is the CSP
+// frame-ancestors source list.
 func ApplySecurityHeaders(h http.Header, frameAncestors string) {
 	if frameAncestors == "" {
 		frameAncestors = "'none'"
@@ -79,9 +93,7 @@ func ApplySecurityHeaders(h http.Header, frameAncestors string) {
 	}, "; ")
 
 	h.Set("Content-Security-Policy", csp)
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	ApplyBaselineHeaders(h)
 	h.Set("Cross-Origin-Resource-Policy", "cross-origin")
 
 	switch frameAncestors {

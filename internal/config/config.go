@@ -70,6 +70,9 @@ type WebRTCConfig struct {
 	// ICEServers are STUN/TURN servers used for gathering (public ICE). TURN
 	// relays media when direct UDP is blocked.
 	ICEServers []ICEServerConfig `yaml:"ice_servers"`
+	// ICETransport is "all" (default: UDP + TCP) or "tcp" (ICE-TCP only, when
+	// UDP is blocked). ICE-TCP still advertises the server's public IP.
+	ICETransport string `yaml:"ice_transport"`
 }
 
 // ICEServerConfig is a STUN or TURN server.
@@ -155,6 +158,9 @@ type SecurityConfig struct {
 	AllowAllEmbed  bool     `yaml:"allow_all_embed"`
 	AllowedDomains []string `yaml:"allowed_domains"`
 	EnforceOrigin  bool     `yaml:"enforce_origin"`
+	// CSPPlayerOnly applies the Content-Security-Policy only to the player page
+	// instead of every response.
+	CSPPlayerOnly bool `yaml:"csp_player_only"`
 }
 
 // PlayerConfig controls the built-in HTML5 player and its protocol fallbacks.
@@ -222,6 +228,7 @@ func Default() Config {
 			ICEUDPPortMin:  50000,
 			ICEUDPPortMax:  50100,
 			MaxSubscribers: 1000,
+			ICETransport:   "all",
 		},
 		Log: LogConfig{Level: "info", Format: "json"},
 		Storage: StorageConfig{
@@ -313,6 +320,7 @@ func applyEnv(cfg *Config) {
 	setInt(&cfg.WebRTC.ICEUDPPortMin, "ARI_ICE_UDP_PORT_MIN")
 	setInt(&cfg.WebRTC.ICEUDPPortMax, "ARI_ICE_UDP_PORT_MAX")
 	setBool(&cfg.WebRTC.EnableLoopback, "ARI_WEBRTC_ENABLE_LOOPBACK")
+	setString(&cfg.WebRTC.ICETransport, "ARI_ICE_TRANSPORT")
 	if v, ok := os.LookupEnv("ARI_ICE_SERVERS"); ok {
 		urls := splitList(v)
 		if len(urls) > 0 {
@@ -347,6 +355,7 @@ func applyEnv(cfg *Config) {
 	setBool(&cfg.Security.AllowAllEmbed, "ARI_SECURITY_ALLOW_ALL_EMBED")
 	setStringSlice(&cfg.Security.AllowedDomains, "ARI_SECURITY_ALLOWED_DOMAINS")
 	setBool(&cfg.Security.EnforceOrigin, "ARI_SECURITY_ENFORCE_ORIGIN")
+	setBool(&cfg.Security.CSPPlayerOnly, "ARI_SECURITY_CSP_PLAYER_ONLY")
 	setString(&cfg.Player.Title, "ARI_PLAYER_TITLE")
 	setString(&cfg.Player.WSPath, "ARI_PLAYER_WS_PATH")
 	setBool(&cfg.Webhooks.Enabled, "ARI_WEBHOOKS_ENABLED")
@@ -424,6 +433,15 @@ func (c Config) Validate() error {
 	if c.WebRTC.ICEUDPPortMin > c.WebRTC.ICEUDPPortMax {
 		return fmt.Errorf("config: webrtc.ice_udp_port_min %d greater than max %d",
 			c.WebRTC.ICEUDPPortMin, c.WebRTC.ICEUDPPortMax)
+	}
+	switch c.WebRTC.ICETransport {
+	case "", "all":
+	case "tcp":
+		if c.WebRTC.ICETCPPort <= 0 {
+			return fmt.Errorf("config: webrtc.ice_transport=tcp requires webrtc.ice_tcp_port")
+		}
+	default:
+		return fmt.Errorf("config: webrtc.ice_transport %q unsupported (want all or tcp)", c.WebRTC.ICETransport)
 	}
 	if c.Storage.Driver != "local" && c.Storage.Driver != "s3" {
 		return fmt.Errorf("config: storage.driver %q unsupported (want local or s3)", c.Storage.Driver)
