@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AssetBase}}/player.css">
+  <link rel="stylesheet" href="{{.AssetBase}}/player.css?v={{.AssetVersion}}">
 </head>
 <body class="ari-body">
   <div class="ari-player" id="ari-player" data-stream-id="{{.StreamID}}">
@@ -36,6 +36,6 @@
   {{if .HLSJSURL}}<script src="{{.HLSJSURL}}"></script>{{end}}
   {{if .DashJSURL}}<script src="{{.DashJSURL}}"></script>{{end}}
   {{if .P2PEnabled}}<script src="/p2p/p2p.js"></script>{{end}}
-  <script src="{{.AssetBase}}/player.js"></script>
+  <script src="{{.AssetBase}}/player.js?v={{.AssetVersion}}"></script>
 </body>
 </html>

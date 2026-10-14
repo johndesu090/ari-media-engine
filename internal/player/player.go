@@ -6,7 +6,9 @@
 package player
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -59,8 +61,9 @@ type Config struct {
 
 // Handler renders the player page and serves its static assets.
 type Handler struct {
-	tmpl *template.Template
-	cfg  Config
+	tmpl         *template.Template
+	cfg          Config
+	assetVersion string
 }
 
 // New parses the embedded templates and returns a Handler.
@@ -73,22 +76,49 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.DashJSURL == "" {
 		cfg.DashJSURL = AssetPath + "/vendor/dash.all.min.js"
 	}
+	// Cache-bust the bundled assets so an updated player is never served stale
+	// against a newer page (or vice versa).
+	ver := assetVersion()
+	cfg.HLSJSURL = versionAsset(cfg.HLSJSURL, ver)
+	cfg.DashJSURL = versionAsset(cfg.DashJSURL, ver)
 	tmpl, err := template.ParseFS(assets, "assets/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("player: parse templates: %w", err)
 	}
-	return &Handler{tmpl: tmpl, cfg: cfg}, nil
+	return &Handler{tmpl: tmpl, cfg: cfg, assetVersion: ver}, nil
+}
+
+// assetVersion derives a short content hash of the player bundle so asset URLs
+// change whenever the bundle changes.
+func assetVersion() string {
+	h := sha256.New()
+	for _, name := range []string{"assets/player.js", "assets/player.css", "assets/player.html"} {
+		if b, err := assets.ReadFile(name); err == nil {
+			h.Write(b)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}
+
+// versionAsset appends the content version to bundled asset URLs (only those
+// served from AssetPath), leaving external/CDN URLs untouched.
+func versionAsset(u, ver string) string {
+	if u == "" || !strings.HasPrefix(u, AssetPath+"/") || strings.Contains(u, "?") {
+		return u
+	}
+	return u + "?v=" + ver
 }
 
 // viewData is the template payload.
 type viewData struct {
-	StreamID   string
-	Title      string
-	AssetBase  string
-	DashJSURL  string
-	HLSJSURL   string
-	P2PEnabled bool
-	ConfigJSON template.JS
+	StreamID     string
+	Title        string
+	AssetBase    string
+	AssetVersion string
+	DashJSURL    string
+	HLSJSURL     string
+	P2PEnabled   bool
+	ConfigJSON   template.JS
 }
 
 // playerConfig is serialized into the page for the JavaScript runtime.
@@ -166,12 +196,13 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := viewData{
-		StreamID:   streamID,
-		Title:      h.cfg.Title,
-		AssetBase:  AssetPath,
-		DashJSURL:  h.cfg.DashJSURL,
-		HLSJSURL:   h.cfg.HLSJSURL,
-		P2PEnabled: h.cfg.P2PEnabled,
+		StreamID:     streamID,
+		Title:        h.cfg.Title,
+		AssetBase:    AssetPath,
+		AssetVersion: h.assetVersion,
+		DashJSURL:    h.cfg.DashJSURL,
+		HLSJSURL:     h.cfg.HLSJSURL,
+		P2PEnabled:   h.cfg.P2PEnabled,
 		// Prevent a stream id containing "</script>" from breaking out.
 		ConfigJSON: template.JS(strings.ReplaceAll(string(raw), "</", `<\/`)),
 	}
@@ -227,9 +258,19 @@ func (h *Handler) ServeToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// Assets serves the embedded CSS/JS bundle under AssetPath.
+// Assets serves the embedded CSS/JS bundle under AssetPath. Versioned requests
+// (with a ?v= query) are cached immutably; unversioned requests revalidate so a
+// stale bundle is never served against a newer page.
 func (h *Handler) Assets() http.Handler {
-	return http.StripPrefix("/player/", http.FileServer(http.FS(assets)))
+	fs := http.StripPrefix("/player/", http.FileServer(http.FS(assets)))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("v") != "" {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		fs.ServeHTTP(w, r)
+	})
 }
 
 // mediaURL builds a playback URL, inserting a signed token path segment when
