@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/johndesu090/ari-media-engine/internal/broadcast"
+	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
@@ -32,6 +33,7 @@ type Options struct {
 	Transcodes func() int
 	HLSBase    string
 	DashBase   string
+	Cluster    *cluster.Manager
 }
 
 // Server exposes the REST API.
@@ -47,6 +49,7 @@ type Server struct {
 	transcodes func() int
 	hlsBase    string
 	dashBase   string
+	cluster    *cluster.Manager
 }
 
 // New constructs the API server.
@@ -71,6 +74,7 @@ func New(opts Options) *Server {
 		transcodes: opts.Transcodes,
 		hlsBase:    opts.HLSBase,
 		dashBase:   opts.DashBase,
+		cluster:    opts.Cluster,
 	}
 }
 
@@ -89,6 +93,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.Handle("GET /api/v1/stats", protect(s.handleStats))
+	mux.Handle("GET /api/v1/cluster/nodes", protect(s.handleClusterNodes))
 
 	mux.Handle("GET /api/v1/streams", protect(s.handleListStreams))
 	mux.Handle("POST /api/v1/streams", protect(s.handleCreateStream))
@@ -154,7 +159,7 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	if s.transcodes != nil {
 		transcoding = s.transcodes()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"uptimeSeconds": int(time.Since(s.startedAt).Seconds()),
 		"startedAt":     s.startedAt,
 		"streamsTotal":  len(streams),
@@ -162,6 +167,32 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 		"viewers":       viewers,
 		"engineStreams": s.engine.StreamCount(),
 		"transcoding":   transcoding,
+	}
+	if s.cluster != nil {
+		payload["nodeId"] = s.cluster.NodeID()
+		if nodes, err := s.cluster.Nodes(rctx()); err == nil {
+			payload["nodes"] = len(nodes)
+		}
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleClusterNodes returns the current cluster membership.
+func (s *Server) handleClusterNodes(w http.ResponseWriter, _ *http.Request) {
+	if s.cluster == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	nodes, err := s.cluster.Nodes(rctx())
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"nodeId":  s.cluster.NodeID(),
+		"count":   len(nodes),
+		"nodes":   nodes,
 	})
 }
 

@@ -345,6 +345,9 @@ func (c Config) Validate() error {
 	if c.Token.Enabled && c.Token.Secret == "" {
 		return fmt.Errorf("config: token.enabled requires token.secret")
 	}
+	if c.Cluster.Enabled && c.Cluster.RedisURL == "" {
+		return fmt.Errorf("config: cluster.enabled requires cluster.redis_url")
+	}
 	return nil
 }
 

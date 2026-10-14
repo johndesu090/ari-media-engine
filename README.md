@@ -12,16 +12,17 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Iframe embedding security:** strict CSP `frame-ancestors` plus a server-side origin guard, configurable globally or per stream.
 - **Built-in HTML5 player:** self-hosted, embeddable, zero-dependency, with automatic protocol selection.
 - **Control plane:** REST API, WebSocket signaling, lifecycle webhooks, and a management dashboard.
-- **Horizontal clustering:** Redis-backed node discovery and state (roadmap).
+- **Horizontal clustering:** Redis-backed node discovery and TTL heartbeats.
 
 > **Status:** Phase 1 MVP. The WebRTC SFU, signaling, REST control plane,
 > embedding security, player, dashboard, **RTMP ingest**, **ABR transcoding**,
-> **per-stream delivery modes** and **HLS/DASH tokenization** are functional.
-> RTMP publishes are demuxed (FLV → H.264) and fanned out to WebRTC subscribers,
-> and optionally transcoded into an HLS/DASH ABR ladder served at
-> `/hls/<streamID>/index.m3u8` and `/dash/<streamID>/manifest.mpd`. SRT/RTSP
-> demuxing, AAC→Opus audio transcoding and Redis clustering are scaffolded with
-> clear extension points (see [`docs/architecture.md`](docs/architecture.md)).
+> **per-stream delivery modes**, **HLS/DASH tokenization** and **Redis
+> clustering** are functional. RTMP publishes are demuxed (FLV → H.264) and
+> fanned out to WebRTC subscribers, and optionally transcoded into an HLS/DASH
+> ABR ladder served at `/hls/<streamID>/index.m3u8` and
+> `/dash/<streamID>/manifest.mpd`. SRT/RTSP demuxing and AAC→Opus audio
+> transcoding remain scaffolded with clear extension points (see
+> [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -89,6 +90,9 @@ overrides. Highlights:
 | `token.ttl_sec`                      | `ARI_TOKEN_TTL_SEC`                | Token lifetime in seconds |
 | `player.dash_js_url`                 | `ARI_PLAYER_DASH_JS_URL`           | Optional dash.js build for DASH playback |
 | `auth.enabled` / `auth.api_key`      | `ARI_AUTH_ENABLED`/`ARI_API_KEY`   | API key protection for control-plane routes |
+| `cluster.enabled`                    | `ARI_CLUSTER_ENABLED`              | Join a Redis-backed cluster |
+| `cluster.redis_url`                  | `ARI_REDIS_URL`                    | Redis connection URL |
+| `cluster.node_id`                    | `ARI_NODE_ID`                      | Node identifier (generated when empty) |
 
 ## Configuring allowed embedding domains
 
@@ -254,12 +258,36 @@ The built-in player mints tokens automatically, so playback through
 `/player.html` keeps working; direct HLS/DASH requests without a valid token get
 `401`.
 
+## Clustering
+
+Enable `cluster` to join a Redis-backed cluster. Each node registers itself under
+`ari:nodes:<id>` with a TTL refreshed by heartbeats, so crashed nodes expire
+automatically.
+
+```yaml
+cluster:
+  enabled: true
+  redis_url: redis://redis:6379/0
+  node_id: node-1        # generated when empty
+  heartbeat_sec: 5
+```
+
+Inspect membership:
+
+```bash
+curl http://localhost:8080/api/v1/cluster/nodes
+```
+
+`/api/v1/stats` also reports `nodeId` and `nodes`. The docker-compose stack
+includes Redis and MinIO for local multi-node testing.
+
 ## REST API
 
 | Method | Path                                        | Description |
 | ------ | ------------------------------------------- | ----------- |
 | GET    | `/healthz`                                  | Liveness probe |
 | GET    | `/api/v1/stats`                             | Aggregate node stats |
+| GET    | `/api/v1/cluster/nodes`                     | Cluster membership |
 | GET    | `/api/v1/streams`                           | List streams |
 | POST   | `/api/v1/streams`                           | Create a stream |
 | GET    | `/api/v1/streams/{id}`                      | Get a stream |
@@ -288,7 +316,7 @@ internal/transcode     FFmpeg ABR → HLS ladder
 internal/delivery      Embedding security (domain policy + CSP middleware)
 internal/player        Built-in HTML5 player + embedded assets
 internal/storage       Local / S3 recording storage (roadmap)
-internal/cluster       Redis-backed clustering (roadmap)
+internal/cluster       Redis-backed node discovery + heartbeats
 internal/api           REST control plane, webhooks
 internal/dashboard     Management console (web/dashboard)
 internal/webhook       Lifecycle webhook dispatcher

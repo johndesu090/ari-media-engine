@@ -15,6 +15,7 @@ import (
 
 	"github.com/johndesu090/ari-media-engine/internal/api"
 	"github.com/johndesu090/ari-media-engine/internal/broadcast"
+	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
 	"github.com/johndesu090/ari-media-engine/internal/ingest"
@@ -39,9 +40,14 @@ type Server struct {
 
 	transcoder  *transcode.Manager
 	rtmpHandler ingest.Handler
+	cluster     *cluster.Manager
 
 	http *http.Server
 }
+
+// BuildVersion is the engine version advertised to the cluster; main overrides
+// it at startup.
+var BuildVersion = "dev"
 
 // New builds a Server from configuration.
 func New(cfg config.Config, log *slog.Logger) (*Server, error) {
@@ -149,6 +155,43 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		return len(transcoder.Active())
 	}
 
+	// Cluster membership (optional).
+	var clusterMgr *cluster.Manager
+	if cfg.Cluster.Enabled {
+		ttl := time.Duration(cfg.Cluster.HeartbeatSec*3) * time.Second
+		registry, err := cluster.NewRedisRegistry(cfg.Cluster.RedisURL, ttl)
+		if err != nil {
+			return nil, fmt.Errorf("server: cluster registry: %w", err)
+		}
+		nodeID := cfg.Cluster.NodeID
+		if nodeID == "" {
+			nodeID = id.New("node")
+		}
+		address := cfg.Server.PublicURL
+		if address == "" {
+			address = cfg.Addr()
+		}
+		clusterMgr = cluster.NewManager(cluster.Options{
+			Registry:  registry,
+			NodeID:    nodeID,
+			Address:   address,
+			Version:   BuildVersion,
+			Heartbeat: time.Duration(cfg.Cluster.HeartbeatSec) * time.Second,
+			Logger:    log,
+			Stats: func() (int, int) {
+				viewers := 0
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if list, err := store.List(ctx); err == nil {
+					for _, b := range list {
+						viewers += b.ViewerCount()
+					}
+				}
+				return engine.StreamCount(), viewers
+			},
+		})
+	}
+
 	apiSrv := api.New(api.Options{
 		Store:      store,
 		Engine:     engine,
@@ -161,6 +204,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		Transcodes: transcodes,
 		HLSBase:    cfg.Player.HLSBase,
 		DashBase:   cfg.Player.DashBase,
+		Cluster:    clusterMgr,
 	})
 
 	root := http.NewServeMux()
@@ -205,6 +249,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		policy:     policy,
 		ingest:     ingest.New(log),
 		transcoder: transcoder,
+		cluster:    clusterMgr,
 		rtmpHandler: ingest.NewRTMPHandler(ingest.RTMPOptions{
 			Engine: engine,
 			Logger: log,
@@ -233,6 +278,11 @@ func (s *Server) Addr() string {
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.startIngest(ctx); err != nil {
 		return err
+	}
+	if s.cluster != nil {
+		if err := s.cluster.Start(ctx); err != nil {
+			return err
+		}
 	}
 
 	errc := make(chan error, 1)
@@ -287,6 +337,11 @@ func (s *Server) shutdown() {
 	}
 	if s.transcoder != nil {
 		s.transcoder.StopAll()
+	}
+	if s.cluster != nil {
+		clusterCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		s.cluster.Close(clusterCtx)
+		cancel()
 	}
 	s.engine.Shutdown()
 }

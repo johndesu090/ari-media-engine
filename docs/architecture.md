@@ -20,7 +20,7 @@ for the remaining enterprise features.
   WebRTC  ──ws──►  signaling ─┐                                   │
   RTMP    ──────►  ingest     ├─►  webrtc.SFU ──►  WebRTC out  ───┼──►  player.html
   SRT     ──────►  (listener) │        │                          │       (WebRTC)
-  RTSP    ──────►             │        └─► transcode (roadmap) ───┼──►  HLS / DASH
+  RTSP    ──────►             │        └─► transcode (FFmpeg) ────┼──►  HLS / DASH
                              │                                     │
   operators ──http──►  api (REST) ──► broadcast.Store ──► delivery.DomainPolicy
                               │            │                        │
@@ -165,10 +165,18 @@ On iOS the volume slider is hidden because programmatic volume is ignored.
 
 ## Scaling and state
 
-`broadcast.Store` is an interface with an in-memory implementation today. A
-Redis-backed implementation (node registry, heartbeats, stream ownership,
-fan-out across nodes) is the intended clustering path; the interface boundary
-was chosen so the media path never needs to change.
+`internal/cluster` provides Redis-backed node discovery. Each node registers a
+JSON record under `ari:nodes:<id>` with a TTL refreshed by a heartbeat goroutine
+(`cluster.heartbeat_sec`), so crashed nodes expire without an explicit
+deregistration. `Manager` reports the local node's stream/viewer counts on each
+heartbeat and exposes membership via `GET /api/v1/cluster/nodes`. A
+`MemoryRegistry` implements the same interface for single-node development and
+tests (exercised with `miniredis`).
+
+`broadcast.Store` remains an in-process interface; the next clustering step is a
+Redis-backed `Store` plus cross-node stream ownership and fan-out, using the
+cluster registry for discovery. The interface boundary was chosen so the media
+path never needs to change.
 
 ## Roadmap
 
@@ -181,6 +189,6 @@ was chosen so the media path never needs to change.
 | ABR transcoding | ✅ MVP | FFmpeg FLV→HLS ladder, auto start/stop on publish |
 | HLS/DASH packaging | ✅ MVP | HLS master+variants and DASH MPD produced by the ABR pipeline (video-only) |
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |
-| Redis clustering | ⏳ | `Store` interface ready for a Redis implementation |
+| Redis clustering | ✅ MVP | Node registry + TTL heartbeats; cross-node stream routing pending |
 | Recording + S3 sync | ⏳ | Config present; recorder pending |
 | Trickle ICE / simulcast | ⏳ | Reduces setup latency, improves large-scale fan-out |
