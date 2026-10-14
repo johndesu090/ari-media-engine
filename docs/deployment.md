@@ -92,14 +92,14 @@ sudo apt-get update
 sudo apt-get install -y ffmpeg curl ca-certificates
 ```
 
-Ari Media Engine requires **Go 1.24+** (Ubuntu 24.04 ships an older Go, so
+Ari Media Engine requires **Go 1.26+** (Ubuntu 24.04 ships an older Go, so
 install the official toolchain):
 
 ```bash
 cd /tmp
-curl -LO https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+curl -LO https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 go version
 ```

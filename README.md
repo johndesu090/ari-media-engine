@@ -58,7 +58,7 @@ Then open the console at <http://localhost:8080/>.
 
 ## Build and run from source
 
-Requires Go 1.24+.
+Requires Go 1.26+.
 
 ```bash
 go build ./cmd/ari

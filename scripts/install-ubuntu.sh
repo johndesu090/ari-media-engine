@@ -39,7 +39,7 @@ ARI_ICE_UDP_MAX="${ARI_ICE_UDP_MAX:-50100}"
 ARI_ENABLE_AUTH="${ARI_ENABLE_AUTH:-0}"
 ARI_ENABLE_TOKEN="${ARI_ENABLE_TOKEN:-0}"
 ARI_ENABLE_CLUSTER="${ARI_ENABLE_CLUSTER:-0}"
-ARI_GO_VERSION="${ARI_GO_VERSION:-1.24.0}"
+ARI_GO_VERSION="${ARI_GO_VERSION:-1.26.0}"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*"; }
@@ -77,7 +77,7 @@ install_go() {
   if command -v go >/dev/null 2>&1; then
     local cur
     cur="$(go env GOVERSION 2>/dev/null | sed 's/^go//')"
-    if [ -n "$cur" ] && [ "$(printf '%s\n%s\n' "1.24.0" "$cur" | sort -V | head -n1)" = "1.24.0" ]; then
+    if [ -n "$cur" ] && [ "$(printf '%s\n%s\n' "1.26.0" "$cur" | sort -V | head -n1)" = "1.26.0" ]; then
       log "Go $cur already installed"
       return
     fi
