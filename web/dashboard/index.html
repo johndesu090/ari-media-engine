@@ -46,8 +46,8 @@
     <h1>Ari Media Engine</h1>
     <span class="badge" id="health">checking…</span>
     <span style="flex:1"></span>
-    <button class="ghost" onclick="loadAll()">Refresh</button>
-    <button class="ghost" id="logout-btn" onclick="logout()" hidden>Sign out</button>
+    <button class="ghost" id="refresh-btn">Refresh</button>
+    <button class="ghost" id="logout-btn" hidden>Sign out</button>
   </header>
 
   <main>
@@ -111,8 +111,8 @@
         <div class="muted" style="margin-bottom:.35rem;">Global allowed domains (one per line, “*.” matches subdomains)</div>
         <textarea id="domains" placeholder="example.com&#10;*.partner.net"></textarea>
         <div style="margin-top:.6rem; display:flex; gap:.5rem;">
-          <button onclick="saveDomains()">Save policy</button>
-          <button class="ghost" onclick="loadDomains()">Reset</button>
+          <button id="save-domains-btn">Save policy</button>
+          <button class="ghost" id="reset-domains-btn">Reset</button>
         </div>
         <p class="muted" style="margin-top:.7rem;">Enforced via <code>Content-Security-Policy: frame-ancestors</code> plus server-side origin checks on <code>/player.html</code>.</p>
       </div>
@@ -127,8 +127,8 @@
           <input type="number" id="token-ttl" min="30" step="30" value="3600" style="flex:1">
         </div>
         <div style="display:flex; gap:.5rem;">
-          <button onclick="saveTokenConfig()">Save token settings</button>
-          <button class="ghost" onclick="loadTokenConfig()">Reset</button>
+          <button id="save-token-btn">Save token settings</button>
+          <button class="ghost" id="reset-token-btn">Reset</button>
         </div>
         <p class="muted" style="margin-top:.7rem;">Tokens are HMAC-signed and embedded in the URL path
           (<code>/hls/&lt;token&gt;/&lt;streamId&gt;/…</code>) so playlists and segments stay authorized.</p>
@@ -140,8 +140,8 @@
           <input type="checkbox" id="p2p-enabled" style="flex:0"> Enable P2P sharing for HLS / DASH
         </label>
         <div style="display:flex; gap:.5rem;">
-          <button onclick="saveP2P()">Save</button>
-          <button class="ghost" onclick="loadP2P()">Reset</button>
+          <button id="save-p2p-btn">Save</button>
+          <button class="ghost" id="reset-p2p-btn">Reset</button>
         </div>
         <p class="muted" style="margin-top:.7rem;">Viewers share segments over WebRTC data channels via the
           tracker at <code>/p2p/ws</code>, falling back to the origin. Connected peers:

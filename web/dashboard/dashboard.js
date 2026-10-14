@@ -262,6 +262,20 @@
 
     function loadAll() { loadHealth(); loadStats(); loadStreams(); loadRecordings(); loadDomains(); loadTokenConfig(); loadP2P(); }
 
+    // Wire controls via addEventListener (inline handlers are blocked by the CSP).
+    function wireControls() {
+      const on = (id, fn) => { const el = document.getElementById(id); if (el) { el.addEventListener("click", fn); } };
+      on("refresh-btn", loadAll);
+      on("logout-btn", logout);
+      on("save-domains-btn", saveDomains);
+      on("reset-domains-btn", loadDomains);
+      on("save-token-btn", saveTokenConfig);
+      on("reset-token-btn", loadTokenConfig);
+      on("save-p2p-btn", saveP2P);
+      on("reset-p2p-btn", loadP2P);
+    }
+    wireControls();
+
     $("create-form").addEventListener("submit", createStream);
     $("quickstart").textContent =
       '1. Create a stream above.\n' +
