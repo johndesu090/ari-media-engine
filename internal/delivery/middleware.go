@@ -38,7 +38,7 @@ func (g EmbedGuard) Middleware(next http.Handler) http.Handler {
 		if g.Policy != nil {
 			ancestors = g.Policy.FrameAncestors(streamID)
 		}
-		ApplySecurityHeaders(w.Header(), ancestors)
+		ApplyPlayerHeaders(w.Header(), ancestors)
 
 		if g.Enforce && g.Policy != nil && !g.Policy.IsAllowed(streamID, requestOrigin(r)) {
 			writeDenied(w, streamID)
@@ -77,15 +77,31 @@ func ApplyBaselineHeaders(h http.Header) {
 // Content-Security-Policy. The frameAncestors argument is the CSP
 // frame-ancestors source list.
 func ApplySecurityHeaders(h http.Header, frameAncestors string) {
+	applySecurityHeaders(h, frameAncestors, false)
+}
+
+// ApplyPlayerHeaders writes the hardening headers plus the CSP used for the
+// embeddable player page. It additionally allows 'unsafe-eval' because the
+// Clappr player compiles its UI templates with new Function; the strict policy
+// is kept for the API and dashboard.
+func ApplyPlayerHeaders(h http.Header, frameAncestors string) {
+	applySecurityHeaders(h, frameAncestors, true)
+}
+
+func applySecurityHeaders(h http.Header, frameAncestors string, allowEval bool) {
 	if frameAncestors == "" {
 		frameAncestors = "'none'"
+	}
+	scriptSrc := "script-src 'self'"
+	if allowEval {
+		scriptSrc = "script-src 'self' 'unsafe-eval'"
 	}
 	csp := strings.Join([]string{
 		"default-src 'self'",
 		"img-src 'self' data: blob:",
 		"media-src 'self' blob:",
 		"connect-src 'self' ws: wss:",
-		"script-src 'self'",
+		scriptSrc,
 		"worker-src 'self' blob:",
 		"child-src 'self' blob:",
 		"style-src 'self' 'unsafe-inline'",

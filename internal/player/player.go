@@ -47,7 +47,10 @@ type Config struct {
 	LowLatency bool
 	// DashJSURL optionally loads a dash.js build for DASH playback.
 	DashJSURL string
-	// HLSJSURL optionally loads an hls.js build for HLS playback.
+	// ClapprURL optionally loads a Clappr build for HLS playback (it bundles
+	// hls.js and falls back to native playback on iOS).
+	ClapprURL string
+	// HLSJSURL is retained for compatibility; Clappr provides hls.js.
 	HLSJSURL string
 	// P2PEnabled turns on the peer-assisted delivery engine.
 	P2PEnabled bool
@@ -76,11 +79,15 @@ func New(cfg Config) (*Handler, error) {
 	if cfg.DashJSURL == "" {
 		cfg.DashJSURL = AssetPath + "/vendor/dash.all.min.js"
 	}
+	if cfg.ClapprURL == "" {
+		cfg.ClapprURL = AssetPath + "/vendor/clappr.min.js"
+	}
 	// Cache-bust the bundled assets so an updated player is never served stale
 	// against a newer page (or vice versa).
 	ver := assetVersion()
 	cfg.HLSJSURL = versionAsset(cfg.HLSJSURL, ver)
 	cfg.DashJSURL = versionAsset(cfg.DashJSURL, ver)
+	cfg.ClapprURL = versionAsset(cfg.ClapprURL, ver)
 	tmpl, err := template.ParseFS(assets, "assets/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("player: parse templates: %w", err)
@@ -92,7 +99,10 @@ func New(cfg Config) (*Handler, error) {
 // change whenever the bundle changes.
 func assetVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"assets/player.js", "assets/player.css", "assets/player.html"} {
+	for _, name := range []string{
+		"assets/player.js", "assets/player.css", "assets/player.html",
+		"assets/vendor/clappr.min.js", "assets/vendor/hls.min.js", "assets/vendor/dash.all.min.js",
+	} {
 		if b, err := assets.ReadFile(name); err == nil {
 			h.Write(b)
 		}
@@ -116,6 +126,7 @@ type viewData struct {
 	AssetBase    string
 	AssetVersion string
 	DashJSURL    string
+	ClapprURL    string
 	HLSJSURL     string
 	P2PEnabled   bool
 	ConfigJSON   template.JS
@@ -201,6 +212,7 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 		AssetBase:    AssetPath,
 		AssetVersion: h.assetVersion,
 		DashJSURL:    h.cfg.DashJSURL,
+		ClapprURL:    h.cfg.ClapprURL,
 		HLSJSURL:     h.cfg.HLSJSURL,
 		P2PEnabled:   h.cfg.P2PEnabled,
 		// Prevent a stream id containing "</script>" from breaking out.

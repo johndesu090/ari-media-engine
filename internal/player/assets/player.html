@@ -8,34 +8,11 @@
   <link rel="stylesheet" href="{{.AssetBase}}/player.css?v={{.AssetVersion}}">
 </head>
 <body class="ari-body">
-  <div class="ari-player" id="ari-player" data-stream-id="{{.StreamID}}">
-    <video id="ari-video" playsinline webkit-playsinline x5-playsinline
-           x5-video-player-type="h5-page" preload="auto"></video>
-
-    <button id="ari-tap" class="ari-tap" type="button">
-      <span class="ari-tap-icon" aria-hidden="true">▶</span>
-      <span class="ari-tap-label">Tap to play</span>
-    </button>
-
-    <div class="ari-overlay">
-      <div class="ari-status" id="ari-status" data-state="connecting" role="status" aria-live="polite">
-        <span class="ari-dot" aria-hidden="true"></span>
-        <span class="ari-status-text" id="ari-status-text">Connecting…</span>
-      </div>
-
-      <div class="ari-controls" id="ari-controls">
-        <button id="ari-play" class="ari-btn" type="button" aria-label="Play or pause">❚❚</button>
-        <button id="ari-mute" class="ari-btn" type="button" aria-label="Mute or unmute">🔊</button>
-        <input id="ari-volume" class="ari-volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
-        <span class="ari-spacer"></span>
-      </div>
-    </div>
-  </div>
+  <div class="ari-player" id="ari-player" data-stream-id="{{.StreamID}}"></div>
 
   <script id="ari-config" type="application/json">{{.ConfigJSON}}</script>
-  {{if .HLSJSURL}}<script src="{{.HLSJSURL}}"></script>{{end}}
   {{if .DashJSURL}}<script src="{{.DashJSURL}}"></script>{{end}}
-  {{if .P2PEnabled}}<script src="/p2p/p2p.js"></script>{{end}}
+  {{if .ClapprURL}}<script src="{{.ClapprURL}}"></script>{{end}}
   <script src="{{.AssetBase}}/player.js?v={{.AssetVersion}}"></script>
 </body>
 </html>
