@@ -1,0 +1,26 @@
+# Binaries and build output
+/bin/
+/dist/
+ari
+arictl
+*.exe
+*.test
+*.out
+
+# Runtime data
+/data/
+*.log
+
+# Go workspace
+go.work
+go.work.sum
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local environment
+.env
+.env.local

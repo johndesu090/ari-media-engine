@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ari Media Engine · Console</title>
+  <style>
+    :root { --bg:#0b0d10; --panel:#151a21; --line:#232b36; --fg:#e8edf4; --muted:#94a3b8; --accent:#38bdf8; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+    header { display:flex; align-items:center; gap:1rem; padding:1rem 1.5rem; border-bottom:1px solid var(--line); }
+    header h1 { font-size:1.1rem; margin:0; letter-spacing:.02em; }
+    header .badge { font-size:.7rem; color:var(--muted); border:1px solid var(--line); padding:.15rem .5rem; border-radius:999px; }
+    main { display:grid; grid-template-columns: 2fr 1fr; gap:1rem; padding:1.5rem; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:.75rem; padding:1rem 1.1rem; }
+    .panel h2 { font-size:.9rem; margin:0 0 .8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    .stats { display:flex; gap:1.5rem; flex-wrap:wrap; }
+    .stat .num { font-size:1.6rem; font-variant-numeric:tabular-nums; }
+    .stat .label { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+    form { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom:1rem; }
+    input, select, textarea { background:#0e1319; border:1px solid var(--line); color:var(--fg); border-radius:.5rem; padding:.5rem .6rem; font:inherit; }
+    input, select { flex:1; min-width:120px; }
+    textarea { width:100%; min-height:80px; resize:vertical; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.82rem; }
+    button { background:var(--accent); color:#04121b; border:none; border-radius:.5rem; padding:.5rem .85rem; font:inherit; font-weight:600; cursor:pointer; }
+    button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+    button.danger { background:transparent; color:var(--err); border:1px solid var(--err); }
+    table { width:100%; border-collapse:collapse; font-size:.86rem; }
+    th, td { text-align:left; padding:.55rem .4rem; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:500; font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; }
+    .pill { display:inline-flex; align-items:center; gap:.35rem; font-size:.75rem; }
+    .pill::before { content:""; width:.5rem; height:.5rem; border-radius:50%; background:var(--muted); }
+    .pill.live::before { background:var(--ok); }
+    .pill.ended::before { background:var(--muted); }
+    .pill.created::before { background:var(--warn); }
+    .row-actions { display:flex; gap:.4rem; flex-wrap:wrap; }
+    .row-actions button { padding:.3rem .55rem; font-size:.78rem; }
+    .snippet { margin-top:.5rem; background:#0e1319; border:1px solid var(--line); border-radius:.5rem; padding:.6rem; font-family:ui-monospace,Menlo,monospace; font-size:.76rem; white-space:pre-wrap; word-break:break-all; }
+    .muted { color:var(--muted); font-size:.8rem; }
+    .toast { position:fixed; bottom:1rem; right:1rem; background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent); padding:.6rem .9rem; border-radius:.5rem; font-size:.85rem; opacity:0; transition:opacity .2s; }
+    .toast.show { opacity:1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ari Media Engine</h1>
+    <span class="badge" id="health">checking…</span>
+    <span style="flex:1"></span>
+    <button class="ghost" onclick="loadAll()">Refresh</button>
+  </header>
+
+  <main>
+    <section style="display:flex; flex-direction:column; gap:1rem;">
+      <div class="panel">
+        <h2>Overview</h2>
+        <div class="stats">
+          <div class="stat"><div class="num" id="s-total">–</div><div class="label">Streams</div></div>
+          <div class="stat"><div class="num" id="s-live">–</div><div class="label">Live</div></div>
+          <div class="stat"><div class="num" id="s-viewers">–</div><div class="label">Viewers</div></div>
+          <div class="stat"><div class="num" id="s-uptime">–</div><div class="label">Uptime</div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Streams</h2>
+        <form id="create-form">
+          <input id="c-id" placeholder="stream id (optional)" autocomplete="off">
+          <input id="c-name" placeholder="display name (optional)" autocomplete="off">
+          <select id="c-type">
+            <option value="webrtc">WebRTC</option>
+            <option value="rtmp">RTMP</option>
+            <option value="srt">SRT</option>
+            <option value="rtsp">RTSP</option>
+          </select>
+          <button type="submit">Create</button>
+        </form>
+        <table>
+          <thead>
+            <tr><th>Stream ID</th><th>Type</th><th>Status</th><th>Viewers</th><th></th></tr>
+          </thead>
+          <tbody id="stream-rows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside style="display:flex; flex-direction:column; gap:1rem;">
+      <div class="panel">
+        <h2>Embedding security</h2>
+        <label class="muted" style="display:flex; align-items:center; gap:.5rem; margin-bottom:.6rem;">
+          <input type="checkbox" id="allow-all" style="flex:0"> Allow embedding on any domain
+        </label>
+        <div class="muted" style="margin-bottom:.35rem;">Global allowed domains (one per line, “*.” matches subdomains)</div>
+        <textarea id="domains" placeholder="example.com&#10;*.partner.net"></textarea>
+        <div style="margin-top:.6rem; display:flex; gap:.5rem;">
+          <button onclick="saveDomains()">Save policy</button>
+          <button class="ghost" onclick="loadDomains()">Reset</button>
+        </div>
+        <p class="muted" style="margin-top:.7rem;">Enforced via <code>Content-Security-Policy: frame-ancestors</code> plus server-side origin checks on <code>/player.html</code>.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Quick start</h2>
+        <p class="muted">Publish from a browser or OBS, then embed the player anywhere on an allow-listed domain.</p>
+        <div class="snippet" id="quickstart">Loading…</div>
+      </div>
+    </aside>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let base = location.origin;
+
+    function toast(msg) {
+      const t = $("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), 2200);
+    }
+
+    async function api(path, opts) {
+      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+      if (res.status === 204) return null;
+      const text = await res.text();
+      let body = null;
+      try { body = text ? JSON.parse(text) : null; } catch (e) { body = text; }
+      if (!res.ok) throw new Error((body && body.message) || res.statusText);
+      return body;
+    }
+
+    function fmtUptime(sec) {
+      sec = Math.max(0, sec | 0);
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      return (h ? h + "h " : "") + (m ? m + "m " : "") + s + "s";
+    }
+
+    async function loadHealth() {
+      try {
+        const h = await api("/healthz");
+        $("health").textContent = h.status === "ok" ? "online" : "unknown";
+      } catch (e) { $("health").textContent = "offline"; }
+    }
+
+    async function loadStats() {
+      try {
+        const s = await api("/api/v1/stats");
+        $("s-total").textContent = s.streamsTotal;
+        $("s-live").textContent = s.streamsLive;
+        $("s-viewers").textContent = s.viewers;
+        $("s-uptime").textContent = fmtUptime(s.uptimeSeconds);
+      } catch (e) { toast("stats: " + e.message); }
+    }
+
+    async function loadStreams() {
+      const tbody = $("stream-rows");
+      try {
+        const data = await api("/api/v1/streams");
+        if (!data.streams.length) { tbody.innerHTML = '<tr><td colspan="5" class="muted">No streams yet.</td></tr>'; return; }
+        tbody.innerHTML = "";
+        for (const s of data.streams) {
+          const tr = document.createElement("tr");
+          tr.innerHTML =
+            '<td><code>' + escapeHtml(s.streamId) + '</code></td>' +
+            '<td>' + escapeHtml(s.type) + '</td>' +
+            '<td><span class="pill ' + s.status + '">' + s.status + '</span></td>' +
+            '<td>' + (s.viewerCount || 0) + '</td>' +
+            '<td><div class="row-actions">' +
+              '<button class="ghost" data-open="' + escapeHtml(s.streamId) + '">Player</button>' +
+              '<button class="ghost" data-embed="' + escapeHtml(s.streamId) + '">Embed</button>' +
+              '<button class="danger" data-del="' + escapeHtml(s.id) + '">Delete</button>' +
+            '</div></td>';
+          tbody.appendChild(tr);
+        }
+        tbody.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openPlayer(b.dataset.open));
+        tbody.querySelectorAll("[data-embed]").forEach(b => b.onclick = () => showEmbed(b.dataset.embed));
+        tbody.querySelectorAll("[data-del]").forEach(b => b.onclick = () => deleteStream(b.dataset.del));
+      } catch (e) { tbody.innerHTML = '<tr><td colspan="5" class="muted">' + escapeHtml(e.message) + '</td></tr>'; }
+    }
+
+    function openPlayer(streamId) {
+      window.open("/player.html?id=" + encodeURIComponent(streamId), "_blank");
+    }
+
+    function embedCode(streamId) {
+      return '<iframe src="' + base + '/player.html?id=' + streamId +
+        '" width="960" height="540" frameborder="0" allow="autoplay"></iframe>';
+    }
+
+    function showEmbed(streamId) {
+      $("quickstart").textContent = embedCode(streamId);
+      navigator.clipboard && navigator.clipboard.writeText(embedCode(streamId)).then(
+        () => toast("Embed code copied"),
+        () => toast("Embed code ready below")
+      );
+    }
+
+    async function createStream(ev) {
+      ev.preventDefault();
+      try {
+        const body = { streamId: $("c-id").value.trim(), name: $("c-name").value.trim(), type: $("c-type").value };
+        await api("/api/v1/streams", { method: "POST", body: JSON.stringify(body) });
+        $("c-id").value = ""; $("c-name").value = "";
+        toast("Stream created");
+        loadAll();
+      } catch (e) { toast("create: " + e.message); }
+    }
+
+    async function deleteStream(id) {
+      if (!confirm("Delete this stream?")) return;
+      try { await api("/api/v1/streams/" + encodeURIComponent(id), { method: "DELETE" }); toast("Deleted"); loadAll(); }
+      catch (e) { toast("delete: " + e.message); }
+    }
+
+    async function loadDomains() {
+      try {
+        const d = await api("/api/v1/security/domains");
+        $("allow-all").checked = !!d.allowAll;
+        $("domains").value = (d.allowedDomains || []).join("\n");
+      } catch (e) { toast("security: " + e.message); }
+    }
+
+    async function saveDomains() {
+      try {
+        const list = $("domains").value.split("\n").map(s => s.trim()).filter(Boolean);
+        await api("/api/v1/security/domains", {
+          method: "PUT",
+          body: JSON.stringify({ allowedDomains: list, allowAll: $("allow-all").checked })
+        });
+        toast("Policy saved");
+        loadDomains();
+      } catch (e) { toast("save: " + e.message); }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadDomains(); }
+
+    $("create-form").addEventListener("submit", createStream);
+    $("quickstart").textContent =
+      '1. Create a stream above.\n' +
+      '2. Publish via WebRTC or RTMP (rtmp://' + location.hostname + ':1935/live/<streamId>).\n' +
+      '3. Embed: ' + base + '/player.html?id=<streamId>';
+
+    loadAll();
+    setInterval(() => { loadStats(); loadStreams(); }, 5000);
+  </script>
+</body>
+</html>

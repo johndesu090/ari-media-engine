@@ -1,0 +1,57 @@
+# Local development stack: Ari Media Engine + Redis (clustering) + MinIO (S3 storage).
+services:
+  ari:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    image: ari-media-engine:dev
+    command: ["-config", "/app/config.yaml"]
+    environment:
+      ARI_LOG_LEVEL: info
+      ARI_CLUSTER_ENABLED: "false"
+      ARI_REDIS_URL: redis://redis:6379/0
+      ARI_STORAGE_DRIVER: local
+      ARI_SECURITY_ALLOWED_DOMAINS: "example.com,*.trusted-partner.net"
+      ARI_SECURITY_ENFORCE_ORIGIN: "true"
+      ARI_PLAYER_TITLE: Ari Media Engine
+    ports:
+      - "8080:8080"                 # HTTP API, dashboard, player, signaling
+      - "1935:1935"                 # RTMP ingest
+      - "8890:8890/tcp"             # SRT ingest (TCP)
+      - "8890:8890/udp"             # SRT ingest (UDP)
+      - "7881:7881/tcp"             # ICE-TCP
+      - "50000-50100:50000-50100/udp" # ICE media UDP range
+    volumes:
+      - ./configs/config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    depends_on:
+      - redis
+      - minio
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ari
+      MINIO_ROOT_PASSWORD: ariminio123
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  minio-data:

@@ -1,0 +1,9 @@
+.git
+.github
+data
+bin
+dist
+*.md
+!README.md
+Dockerfile
+docker-compose.yml

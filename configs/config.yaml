@@ -1,0 +1,85 @@
+# Ari Media Engine — sample configuration.
+# Every value below can be overridden with an ARI_* environment variable.
+
+server:
+  host: 0.0.0.0
+  port: 8080
+  read_timeout_sec: 15
+  write_timeout_sec: 15
+  shutdown_timeout_sec: 15
+  dashboard_dir: web/dashboard
+  # public_url is advertised to players and embed snippets (e.g. https://media.example.com).
+  public_url: ""
+
+webrtc:
+  # Advertised host candidates for NAT traversal (set to your public IP(s) in production).
+  ice_public_ips: []
+  ice_tcp_port: 7881
+  ice_udp_port_min: 50000
+  ice_udp_port_max: 50100
+  enable_loopback: true
+  max_subscribers_per_broadcast: 1000
+
+log:
+  level: info
+  format: json
+
+storage:
+  driver: local          # local | s3
+  local_root: ./data/recordings
+  s3_endpoint: ""
+  s3_bucket: ""
+  s3_region: ""
+  s3_access_key: ""
+  s3_secret_key: ""
+
+cluster:
+  enabled: false
+  redis_url: redis://localhost:6379/0
+  node_id: ""
+  heartbeat_sec: 5
+
+ingest:
+  rtmp:
+    enabled: true
+    port: 1935
+  srt:
+    enabled: true
+    port: 8890
+  rtsp:
+    enabled: false
+    port: 8554
+
+hls:
+  enabled: true
+  segment_sec: 2
+  playlist_size: 6
+  low_latency: false
+  output_dir: ./data/hls
+
+auth:
+  enabled: false
+  jwt_secret: ""
+  api_key: ""
+
+# Iframe embedding security. When allow_all_embed is false, only the domains
+# listed here (globally) or per stream may frame a stream. A leading "*." matches
+# any subdomain.
+security:
+  allow_all_embed: false
+  allowed_domains:
+    - example.com
+    - "*.trusted-partner.net"
+  enforce_origin: true
+
+player:
+  title: Ari Media Engine
+  ws_path: /ws
+  hls_base: /hls
+  dash_base: /dash
+  low_latency_default: true
+
+webhooks:
+  enabled: false
+  urls: []
+  secret: ""

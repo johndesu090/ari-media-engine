@@ -1,0 +1,131 @@
+:root {
+  --ari-bg: #0b0d10;
+  --ari-fg: #f5f7fa;
+  --ari-accent: #38bdf8;
+  --ari-ok: #22c55e;
+  --ari-warn: #f59e0b;
+  --ari-err: #ef4444;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--ari-bg);
+  color: var(--ari-fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.ari-player {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 180px;
+  overflow: hidden;
+  background: #000;
+}
+
+.ari-player video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.ari-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.ari-player:hover .ari-overlay,
+.ari-player.ari-active .ari-overlay {
+  opacity: 1;
+}
+
+.ari-overlay > * { pointer-events: auto; }
+
+.ari-status {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.75rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+.ari-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--ari-warn);
+}
+
+.ari-status[data-state="live"] .ari-dot { background: var(--ari-ok); }
+.ari-status[data-state="error"] .ari-dot { background: var(--ari-err); }
+.ari-status[data-state="connecting"] .ari-dot { animation: ari-pulse 1s infinite; }
+
+@keyframes ari-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.ari-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+}
+
+.ari-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.1rem;
+  height: 2.1rem;
+  padding: 0 0.5rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ari-fg);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.ari-btn:hover { background: rgba(255, 255, 255, 0.24); }
+.ari-btn:focus-visible { outline: 2px solid var(--ari-accent); outline-offset: 2px; }
+
+.ari-toggle[aria-pressed="true"] {
+  background: var(--ari-accent);
+  color: #04121b;
+  font-weight: 700;
+}
+
+.ari-volume {
+  width: 90px;
+  accent-color: var(--ari-accent);
+}
+
+.ari-spacer { flex: 1; }
+
+.ari-latency-readout {
+  min-width: 3.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
