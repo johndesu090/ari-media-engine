@@ -3,13 +3,15 @@
 // fanned out through TrackLocalStaticRTP, delivering sub-second glass-to-glass
 // latency.
 //
-// This is a deliberately small, correct SFU skeleton:
+// This is a deliberately small, correct SFU:
 //   - one publisher per stream, many subscribers
-//   - non-trickle ICE (the full SDP is exchanged in a single message)
+//   - trickle ICE (candidates are relayed as they are gathered) with a
+//     non-trickle fallback when no candidate callback is supplied
+//   - simulcast reception: a publisher's RID layers are accepted and the
+//     preferred (highest) layer is forwarded to subscribers
 //   - RTP forwarding without transcoding
 //
-// Renegotiation, simulcast/SVC, trickle ICE and congestion control are tracked
-// as follow-up work in docs/architecture.md.
+// Renegotiation and SVC are tracked as follow-up work in docs/architecture.md.
 package webrtc
 
 import (
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pion/ice/v4"
+	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 	pion "github.com/pion/webrtc/v4"
 )
@@ -46,6 +49,13 @@ const (
 	// tracks (audio + video) are collected before the stream is marked live.
 	liveDebounce = 200 * time.Millisecond
 )
+
+// ICECandidate is a trickled ICE candidate exchanged over the signaling channel.
+type ICECandidate struct {
+	Candidate     string  `json:"candidate"`
+	SDPMid        *string `json:"sdpMid,omitempty"`
+	SDPMLineIndex *uint16 `json:"sdpMLineIndex,omitempty"`
+}
 
 // Config configures the WebRTC engine.
 type Config struct {
@@ -112,9 +122,19 @@ func NewEngine(cfg Config, log *slog.Logger) (*Engine, error) {
 		return nil, err
 	}
 
+	// Default interceptors enable NACK/RTCP and simulcast reception.
+	registry := &interceptor.Registry{}
+	if err := pion.RegisterDefaultInterceptors(media, registry); err != nil {
+		if tcpMux != nil {
+			_ = tcpMux.Close()
+		}
+		return nil, err
+	}
+
 	api := pion.NewAPI(
 		pion.WithMediaEngine(media),
 		pion.WithSettingEngine(settings),
+		pion.WithInterceptorRegistry(registry),
 	)
 
 	return &Engine{
@@ -136,12 +156,15 @@ type stream struct {
 	ingest      *IngestSession
 	subscribers map[string]*peer
 	tracks      []*pion.TrackLocalStaticRTP
+	simulcast   map[string]*pion.TrackLocalStaticRTP
 	live        bool
 	liveTimer   *time.Timer
 }
 
-// Publish attaches a publisher to streamID and returns the SDP answer.
-func (e *Engine) Publish(streamID, sessionID, offerSDP string) (string, error) {
+// Publish attaches a publisher to streamID and returns the SDP answer. When
+// onCandidate is non-nil, ICE is trickled through it; otherwise gathering is
+// awaited before returning (non-trickle).
+func (e *Engine) Publish(streamID, sessionID, offerSDP string, onCandidate func(ICECandidate)) (string, error) {
 	s := e.getOrCreateStream(streamID)
 
 	s.mu.Lock()
@@ -155,17 +178,23 @@ func (e *Engine) Publish(streamID, sessionID, offerSDP string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	wireICECandidates(pc, onCandidate)
 
 	pc.OnTrack(func(remote *pion.TrackRemote, _ *pion.RTPReceiver) {
-		local, err := pion.NewTrackLocalStaticRTP(remote.Codec().RTPCodecCapability, remote.ID(), streamID)
+		rid := remote.RID()
+		local, err := pion.NewTrackLocalStaticRTP(remote.Codec().RTPCodecCapability, remote.ID()+rid, streamID)
 		if err != nil {
 			s.log.Error("create local track", "err", err)
 			return
 		}
-		s.addTrack(local)
+		if rid != "" {
+			s.addSimulcastTrack(rid, local)
+		} else {
+			s.addTrack(local)
+		}
 		go s.forward(remote, local)
 		s.scheduleLive()
-		s.log.Info("publisher track", "kind", remote.Kind().String(), "codec", remote.Codec().MimeType)
+		s.log.Info("publisher track", "kind", remote.Kind().String(), "codec", remote.Codec().MimeType, "rid", rid)
 	})
 
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
@@ -190,9 +219,11 @@ func (e *Engine) Publish(streamID, sessionID, offerSDP string) (string, error) {
 		_ = pc.Close()
 		return "", err
 	}
-	if err := waitGathering(pc); err != nil {
-		_ = pc.Close()
-		return "", err
+	if onCandidate == nil {
+		if err := waitGathering(pc); err != nil {
+			_ = pc.Close()
+			return "", err
+		}
 	}
 
 	s.mu.Lock()
@@ -212,8 +243,9 @@ func (e *Engine) Publish(streamID, sessionID, offerSDP string) (string, error) {
 	return local.SDP, nil
 }
 
-// Subscribe creates a subscriber PeerConnection and returns the SDP offer.
-func (e *Engine) Subscribe(streamID, sessionID string) (string, error) {
+// Subscribe creates a subscriber PeerConnection and returns the SDP offer. When
+// onCandidate is non-nil, ICE is trickled through it.
+func (e *Engine) Subscribe(streamID, sessionID string, onCandidate func(ICECandidate)) (string, error) {
 	e.mu.RLock()
 	s, ok := e.streams[streamID]
 	e.mu.RUnlock()
@@ -233,6 +265,7 @@ func (e *Engine) Subscribe(streamID, sessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	wireICECandidates(pc, onCandidate)
 
 	for _, t := range tracks {
 		if _, err := pc.AddTrack(t); err != nil {
@@ -250,9 +283,11 @@ func (e *Engine) Subscribe(streamID, sessionID string) (string, error) {
 		_ = pc.Close()
 		return "", err
 	}
-	if err := waitGathering(pc); err != nil {
-		_ = pc.Close()
-		return "", err
+	if onCandidate == nil {
+		if err := waitGathering(pc); err != nil {
+			_ = pc.Close()
+			return "", err
+		}
 	}
 
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
@@ -372,6 +407,7 @@ func (e *Engine) getOrCreateStream(id string) *stream {
 			id:          id,
 			log:         e.log.With("stream", id),
 			subscribers: make(map[string]*peer),
+			simulcast:   make(map[string]*pion.TrackLocalStaticRTP),
 		}
 		e.streams[id] = s
 	}
@@ -399,6 +435,7 @@ func (e *Engine) removePublisher(streamID, sessionID string) {
 	s.publisher = nil
 	s.subscribers = make(map[string]*peer)
 	s.tracks = nil
+	s.simulcast = nil
 	s.live = false
 	if s.liveTimer != nil {
 		s.liveTimer.Stop()
@@ -427,6 +464,7 @@ func (s *stream) removeIngest(session *IngestSession) {
 	s.ingest = nil
 	s.subscribers = make(map[string]*peer)
 	s.tracks = nil
+	s.simulcast = nil
 	s.live = false
 	if s.liveTimer != nil {
 		s.liveTimer.Stop()
@@ -451,6 +489,15 @@ func (s *stream) trackSnapshot() []*pion.TrackLocalStaticRTP {
 	defer s.mu.RUnlock()
 	out := make([]*pion.TrackLocalStaticRTP, len(s.tracks))
 	copy(out, s.tracks)
+	if len(s.simulcast) > 0 {
+		rids := make([]string, 0, len(s.simulcast))
+		for rid := range s.simulcast {
+			rids = append(rids, rid)
+		}
+		if best := selectRID(rids); best != "" {
+			out = append(out, s.simulcast[best])
+		}
+	}
 	return out
 }
 
@@ -458,6 +505,15 @@ func (s *stream) addTrack(t *pion.TrackLocalStaticRTP) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tracks = append(s.tracks, t)
+}
+
+func (s *stream) addSimulcastTrack(rid string, t *pion.TrackLocalStaticRTP) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.simulcast == nil {
+		s.simulcast = make(map[string]*pion.TrackLocalStaticRTP)
+	}
+	s.simulcast[rid] = t
 }
 
 func (s *stream) addSubscriber(sessionID string, p *peer, max int) error {
@@ -531,4 +587,48 @@ func waitGathering(pc *pion.PeerConnection) error {
 	case <-time.After(gatherTimeout):
 		return errors.New("webrtc: ICE gathering timed out")
 	}
+}
+
+// wireICECandidates relays gathered candidates through onCandidate for trickle
+// ICE. It is a no-op when onCandidate is nil.
+func wireICECandidates(pc *pion.PeerConnection, onCandidate func(ICECandidate)) {
+	if onCandidate == nil {
+		return
+	}
+	pc.OnICECandidate(func(c *pion.ICECandidate) {
+		if c == nil {
+			return
+		}
+		j := c.ToJSON()
+		onCandidate(ICECandidate{Candidate: j.Candidate, SDPMid: j.SDPMid, SDPMLineIndex: j.SDPMLineIndex})
+	})
+}
+
+// AddICECandidate applies a trickled remote candidate to the publisher or
+// subscriber session on streamID.
+func (e *Engine) AddICECandidate(streamID, sessionID string, c ICECandidate) error {
+	e.mu.RLock()
+	s, ok := e.streams[streamID]
+	e.mu.RUnlock()
+	if !ok {
+		return ErrBroadcastNotFound
+	}
+
+	s.mu.RLock()
+	var pc *pion.PeerConnection
+	if s.publisher != nil && s.publisher.id == sessionID {
+		pc = s.publisher.pc
+	} else if sub := s.subscribers[sessionID]; sub != nil {
+		pc = sub.pc
+	}
+	s.mu.RUnlock()
+	if pc == nil {
+		return ErrSessionNotFound
+	}
+
+	return pc.AddICECandidate(pion.ICECandidateInit{
+		Candidate:     c.Candidate,
+		SDPMid:        c.SDPMid,
+		SDPMLineIndex: c.SDPMLineIndex,
+	})
 }

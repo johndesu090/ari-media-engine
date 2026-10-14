@@ -115,6 +115,18 @@
     var ws = new WebSocket(signalingURL());
     state.ws = ws;
 
+    pc.onicecandidate = function (ev) {
+      if (ev.candidate && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: "candidate",
+          streamId: cfg.streamId,
+          sdpMid: ev.candidate.sdpMid,
+          sdpMLineIndex: ev.candidate.sdpMLineIndex,
+          candidate: ev.candidate.candidate
+        }));
+      }
+    };
+
     ws.onopen = function () {
       ws.send(JSON.stringify({ type: "subscribe", streamId: cfg.streamId }));
     };
@@ -134,6 +146,12 @@
             }));
           })
           .catch(function () { nextFallback("negotiation failed"); });
+      } else if (msg.type === "candidate" && msg.candidate) {
+        pc.addIceCandidate(new RTCIceCandidate({
+          candidate: msg.candidate,
+          sdpMid: msg.sdpMid,
+          sdpMLineIndex: msg.sdpMLineIndex
+        })).catch(function () {});
       } else if (msg.type === "error") {
         nextFallback(msg.error || "signaling error");
       }

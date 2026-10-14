@@ -21,11 +21,14 @@ import (
 
 // Message is the signaling envelope exchanged with clients.
 type Message struct {
-	Type      string `json:"type"`
-	StreamID  string `json:"streamId,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
-	SDP       string `json:"sdp,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Type          string  `json:"type"`
+	StreamID      string  `json:"streamId,omitempty"`
+	SessionID     string  `json:"sessionId,omitempty"`
+	SDP           string  `json:"sdp,omitempty"`
+	Candidate     string  `json:"candidate,omitempty"`
+	SDPMid        *string `json:"sdpMid,omitempty"`
+	SDPMLineIndex *uint16 `json:"sdpMLineIndex,omitempty"`
+	Error         string  `json:"error,omitempty"`
 }
 
 // Message type constants.
@@ -35,6 +38,7 @@ const (
 	TypeSubscribe        = "subscribe"
 	TypeOffer            = "offer"
 	TypeSubscriberAnswer = "subscriber-answer"
+	TypeCandidate        = "candidate"
 	TypeLeave            = "leave"
 	TypePing             = "ping"
 	TypePong             = "pong"
@@ -202,6 +206,12 @@ func (s *Server) dispatch(c *wsConn, msg Message, sessions map[string]session, m
 		return s.handleSubscribe(c, msg, sessions, mu)
 	case TypeSubscriberAnswer:
 		return s.engine.SetSubscriberAnswer(msg.StreamID, msg.SessionID, msg.SDP)
+	case TypeCandidate:
+		return s.engine.AddICECandidate(msg.StreamID, msg.SessionID, webrtc.ICECandidate{
+			Candidate:     msg.Candidate,
+			SDPMid:        msg.SDPMid,
+			SDPMLineIndex: msg.SDPMLineIndex,
+		})
 	case TypeLeave:
 		return s.handleLeave(msg, sessions, mu)
 	case TypePing:
@@ -221,7 +231,7 @@ func (s *Server) handlePublish(c *wsConn, msg Message, sessions map[string]sessi
 	if sessionID == "" {
 		sessionID = newSessionID()
 	}
-	answer, err := s.engine.Publish(msg.StreamID, sessionID, msg.SDP)
+	answer, err := s.engine.Publish(msg.StreamID, sessionID, msg.SDP, s.candidateRelay(c, msg.StreamID, sessionID))
 	if err != nil {
 		return err
 	}
@@ -244,7 +254,7 @@ func (s *Server) handleSubscribe(c *wsConn, msg Message, sessions map[string]ses
 	if sessionID == "" {
 		sessionID = newSessionID()
 	}
-	offer, err := s.engine.Subscribe(msg.StreamID, sessionID)
+	offer, err := s.engine.Subscribe(msg.StreamID, sessionID, s.candidateRelay(c, msg.StreamID, sessionID))
 	if err != nil {
 		return err
 	}
@@ -312,6 +322,21 @@ func (s *Server) webRTCEnabled(streamID string) bool {
 		return true
 	}
 	return b.Delivery().UsesWebRTC()
+}
+
+// candidateRelay returns a callback that forwards trickled ICE candidates to
+// the client over the signaling connection.
+func (s *Server) candidateRelay(c *wsConn, streamID, sessionID string) func(webrtc.ICECandidate) {
+	return func(cand webrtc.ICECandidate) {
+		_ = c.writeJSON(Message{
+			Type:          TypeCandidate,
+			StreamID:      streamID,
+			SessionID:     sessionID,
+			Candidate:     cand.Candidate,
+			SDPMid:        cand.SDPMid,
+			SDPMLineIndex: cand.SDPMLineIndex,
+		})
+	}
 }
 
 func originChecker(allowed []string) func(*http.Request) bool {

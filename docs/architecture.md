@@ -61,9 +61,27 @@ for the remaining enterprise features.
    `subscriber-answer`.
 3. RTP is fanned out unchanged, so latency is dominated by network RTT.
 
-ICE is non-trickle: the full SDP is exchanged in a single message, which is
-simpler and proxy-friendly. Trickle ICE, simulcast/SVC and congestion control
-are follow-ups.
+ICE is trickled: the engine returns its SDP immediately and relays gathered
+candidates as `candidate` signaling messages, and the client does the same, so
+connections establish without waiting for gathering to complete. A non-trickle
+fallback is used when no candidate callback is supplied. SVC and congestion
+control are follow-ups.
+
+## Trickle ICE and simulcast
+
+`webrtc.Engine.Publish`/`Subscribe` accept an `onCandidate` callback. When set,
+the engine registers `OnICECandidate`, returns its SDP without waiting for
+gathering, and the signaling layer forwards each candidate as a `candidate`
+message; remote candidates arrive as `candidate` messages and are applied with
+`Engine.AddICECandidate`. The player mirrors this with `pc.onicecandidate` and
+`pc.addIceCandidate`.
+
+Simulcast: a publisher's offer may carry multiple RID layers. `OnTrack` fires
+once per RID; the engine creates one `TrackLocalStaticRTP` per RID and
+`trackSnapshot` exposes only the preferred layer (`selectRID` ranks `h > m > l`),
+which subscribers receive. Unselected layers are still forwarded into unbound
+tracks (a no-op fan-out) so a preferred layer that appears later is already
+available; per-subscriber layer switching is a follow-up.
 
 ## RTMP ingest path
 
@@ -198,7 +216,7 @@ path never needs to change.
 
 | Area | Status | Notes |
 | ---- | ------ | ----- |
-| WebRTC SFU + signaling | ✅ MVP | Non-trickle ICE, RTP forwarding |
+| WebRTC SFU + signaling | ✅ MVP | Trickle ICE, RTP forwarding, simulcast reception |
 | Embed security + player | ✅ MVP | CSP + origin guard + embedded assets |
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
 | RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264→RTP works end-to-end; SRT/RTSP + AAC→Opus pending |
@@ -207,4 +225,4 @@ path never needs to change.
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |
 | Redis clustering | ✅ MVP | Node registry + TTL heartbeats; cross-node stream routing pending |
 | Recording + S3 sync | ✅ MVP | Raw FLV recording uploaded to local/S3 storage on unpublish |
-| Trickle ICE / simulcast | ⏳ | Reduces setup latency, improves large-scale fan-out |
+| Trickle ICE / simulcast | ✅ MVP | Candidates relayed incrementally; SFU forwards the preferred RID layer |

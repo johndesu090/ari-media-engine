@@ -3,7 +3,8 @@
 An open-source, high-performance, ultra-low-latency live streaming engine that
 mirrors and extends the core enterprise features of Ant Media Server.
 
-- **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery.
+- **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery over trickle ICE.
+- **Simulcast:** accepts a publisher's RID layers and forwards the preferred layer to subscribers.
 - **Multi-protocol ingest:** WebRTC publish, plus RTMP ingest (H.264) and SRT / RTSP listeners.
 - **Multi-protocol playback:** WebRTC first, with HLS / DASH fallback.
 - **Per-stream delivery modes:** WebRTC-only, HLS-only, DASH-only or all, switchable from the dashboard or API.
@@ -15,15 +16,16 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Horizontal clustering:** Redis-backed node discovery and TTL heartbeats.
 - **Recording & storage:** record published streams and sync to local disk or S3/MinIO.
 
-> **Status:** Phase 1 MVP. The WebRTC SFU, signaling, REST control plane,
-> embedding security, player, dashboard, **RTMP ingest**, **ABR transcoding**,
-> **per-stream delivery modes**, **HLS/DASH tokenization**, **Redis clustering**
-> and **recording to local/S3 storage** are functional. RTMP publishes are
-> demuxed (FLV → H.264) and fanned out to WebRTC subscribers, optionally
-> transcoded into an HLS/DASH ABR ladder served at `/hls/<streamID>/index.m3u8`
-> and `/dash/<streamID>/manifest.mpd`, and optionally recorded. SRT/RTSP
-> demuxing and AAC→Opus audio transcoding remain scaffolded with clear extension
-> points (see [`docs/architecture.md`](docs/architecture.md)).
+> **Status:** Phase 1 MVP. The WebRTC SFU (with **trickle ICE** and
+> **simulcast**), signaling, REST control plane, embedding security, player,
+> dashboard, **RTMP ingest**, **ABR transcoding**, **per-stream delivery
+> modes**, **HLS/DASH tokenization**, **Redis clustering** and **recording to
+> local/S3 storage** are functional. RTMP publishes are demuxed (FLV → H.264)
+> and fanned out to WebRTC subscribers, optionally transcoded into an HLS/DASH
+> ABR ladder served at `/hls/<streamID>/index.m3u8` and
+> `/dash/<streamID>/manifest.mpd`, and optionally recorded. SRT/RTSP demuxing and
+> AAC→Opus audio transcoding remain scaffolded with clear extension points (see
+> [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
