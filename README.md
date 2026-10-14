@@ -13,16 +13,17 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Built-in HTML5 player:** self-hosted, embeddable, zero-dependency, with automatic protocol selection.
 - **Control plane:** REST API, WebSocket signaling, lifecycle webhooks, and a management dashboard.
 - **Horizontal clustering:** Redis-backed node discovery and TTL heartbeats.
+- **Recording & storage:** record published streams and sync to local disk or S3/MinIO.
 
 > **Status:** Phase 1 MVP. The WebRTC SFU, signaling, REST control plane,
 > embedding security, player, dashboard, **RTMP ingest**, **ABR transcoding**,
-> **per-stream delivery modes**, **HLS/DASH tokenization** and **Redis
-> clustering** are functional. RTMP publishes are demuxed (FLV → H.264) and
-> fanned out to WebRTC subscribers, and optionally transcoded into an HLS/DASH
-> ABR ladder served at `/hls/<streamID>/index.m3u8` and
-> `/dash/<streamID>/manifest.mpd`. SRT/RTSP demuxing and AAC→Opus audio
-> transcoding remain scaffolded with clear extension points (see
-> [`docs/architecture.md`](docs/architecture.md)).
+> **per-stream delivery modes**, **HLS/DASH tokenization**, **Redis clustering**
+> and **recording to local/S3 storage** are functional. RTMP publishes are
+> demuxed (FLV → H.264) and fanned out to WebRTC subscribers, optionally
+> transcoded into an HLS/DASH ABR ladder served at `/hls/<streamID>/index.m3u8`
+> and `/dash/<streamID>/manifest.mpd`, and optionally recorded. SRT/RTSP
+> demuxing and AAC→Opus audio transcoding remain scaffolded with clear extension
+> points (see [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -93,6 +94,10 @@ overrides. Highlights:
 | `cluster.enabled`                    | `ARI_CLUSTER_ENABLED`              | Join a Redis-backed cluster |
 | `cluster.redis_url`                  | `ARI_REDIS_URL`                    | Redis connection URL |
 | `cluster.node_id`                    | `ARI_NODE_ID`                      | Node identifier (generated when empty) |
+| `recording.enabled`                  | `ARI_RECORDING_ENABLED`            | Record published streams |
+| `recording.auto_record`              | `ARI_RECORDING_AUTO`               | Record automatically on publish |
+| `storage.driver`                     | `ARI_STORAGE_DRIVER`               | `local` or `s3` |
+| `storage.public_base`                | `ARI_STORAGE_PUBLIC_BASE`          | URL prefix for recording links |
 
 ## Configuring allowed embedding domains
 
@@ -281,6 +286,32 @@ curl http://localhost:8080/api/v1/cluster/nodes
 `/api/v1/stats` also reports `nodeId` and `nodes`. The docker-compose stack
 includes Redis and MinIO for local multi-node testing.
 
+## Recording
+
+Enable recording to capture each published stream's raw FLV and upload it to the
+configured storage backend on unpublish:
+
+```yaml
+recording:
+  enabled: true
+  auto_record: true
+storage:
+  driver: local              # or s3
+  local_root: ./data/recordings
+  public_base: ""            # e.g. https://media.example.com/recordings
+```
+
+For S3/MinIO, set `storage.driver: s3` with `s3_endpoint`, `s3_bucket`,
+`s3_access_key`, `s3_secret_key` (and `s3_use_ssl`); the bucket is created on
+first use. List and delete recordings via the dashboard or the API:
+
+```bash
+curl http://localhost:8080/api/v1/recordings
+curl -X DELETE http://localhost:8080/api/v1/recordings/STREAM/FILE.flv
+```
+
+With the `local` driver, recordings are served at `/recordings/<key>`.
+
 ## REST API
 
 | Method | Path                                        | Description |
@@ -288,6 +319,8 @@ includes Redis and MinIO for local multi-node testing.
 | GET    | `/healthz`                                  | Liveness probe |
 | GET    | `/api/v1/stats`                             | Aggregate node stats |
 | GET    | `/api/v1/cluster/nodes`                     | Cluster membership |
+| GET    | `/api/v1/recordings`                        | List recordings |
+| DELETE | `/api/v1/recordings/{key...}`               | Delete a recording |
 | GET    | `/api/v1/streams`                           | List streams |
 | POST   | `/api/v1/streams`                           | Create a stream |
 | GET    | `/api/v1/streams/{id}`                      | Get a stream |
@@ -315,7 +348,9 @@ internal/webrtc        Pion-based SFU
 internal/transcode     FFmpeg ABR → HLS ladder
 internal/delivery      Embedding security (domain policy + CSP middleware)
 internal/player        Built-in HTML5 player + embedded assets
-internal/storage       Local / S3 recording storage (roadmap)
+internal/storage       Local / S3 object storage
+internal/recorder      FLV recording + upload to storage
+internal/flv           FLV container framing (shared)
 internal/cluster       Redis-backed node discovery + heartbeats
 internal/api           REST control plane, webhooks
 internal/dashboard     Management console (web/dashboard)

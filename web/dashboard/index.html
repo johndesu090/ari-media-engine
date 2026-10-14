@@ -58,6 +58,7 @@
           <div class="stat"><div class="num" id="s-live">–</div><div class="label">Live</div></div>
           <div class="stat"><div class="num" id="s-viewers">–</div><div class="label">Viewers</div></div>
           <div class="stat"><div class="num" id="s-uptime">–</div><div class="label">Uptime</div></div>
+          <div class="stat"><div class="num" id="s-recording">–</div><div class="label">Recording</div></div>
         </div>
       </div>
 
@@ -84,7 +85,17 @@
           <thead>
             <tr><th>Stream ID</th><th>Type</th><th>Status</th><th>Delivery</th><th>Viewers</th><th></th></tr>
           </thead>
-          <tbody id="stream-rows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+          <tbody id="stream-rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h2>Recordings</h2>
+        <table>
+          <thead>
+            <tr><th>Key</th><th>Size</th><th>Modified</th><th></th></tr>
+          </thead>
+          <tbody id="recording-rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -172,6 +183,7 @@
         $("s-live").textContent = s.streamsLive;
         $("s-viewers").textContent = s.viewers;
         $("s-uptime").textContent = fmtUptime(s.uptimeSeconds);
+        $("s-recording").textContent = s.recording || 0;
       } catch (e) { toast("stats: " + e.message); }
     }
 
@@ -315,7 +327,48 @@
       } catch (e) { toast("save token: " + e.message); }
     }
 
-    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadDomains(); loadTokenConfig(); }
+    function fmtBytes(n) {
+      n = n || 0;
+      const u = ["B", "KB", "MB", "GB"];
+      let i = 0;
+      while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+      return n.toFixed(i === 0 ? 0 : 1) + " " + u[i];
+    }
+
+    async function loadRecordings() {
+      const tbody = $("recording-rows");
+      try {
+        const data = await api("/api/v1/recordings");
+        if (!data.enabled) { tbody.innerHTML = '<tr><td colspan="4" class="muted">Recording storage disabled.</td></tr>'; return; }
+        if (!data.recordings.length) { tbody.innerHTML = '<tr><td colspan="4" class="muted">No recordings yet.</td></tr>'; return; }
+        tbody.innerHTML = "";
+        for (const r of data.recordings) {
+          const tr = document.createElement("tr");
+          const link = r.url ? '<a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener">open</a>' : "";
+          tr.innerHTML =
+            '<td><code>' + escapeHtml(r.key) + '</code></td>' +
+            '<td>' + fmtBytes(r.size) + '</td>' +
+            '<td>' + escapeHtml((r.modifiedAt || "").replace("T", " ").slice(0, 19)) + '</td>' +
+            '<td><div class="row-actions">' + link +
+              '<button class="danger" data-delrec="' + escapeHtml(r.key) + '">Delete</button></div></td>';
+          tbody.appendChild(tr);
+        }
+        tbody.querySelectorAll("[data-delrec]").forEach(b => b.onclick = () => deleteRecording(b.dataset.delrec));
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="4" class="muted">' + escapeHtml(e.message) + '</td></tr>';
+      }
+    }
+
+    async function deleteRecording(key) {
+      if (!confirm("Delete recording " + key + "?")) return;
+      try {
+        await api("/api/v1/recordings/" + key.split("/").map(encodeURIComponent).join("/"), { method: "DELETE" });
+        toast("Recording deleted");
+        loadRecordings();
+      } catch (e) { toast("delete: " + e.message); }
+    }
+
+    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadRecordings(); loadDomains(); loadTokenConfig(); }
 
     $("create-form").addEventListener("submit", createStream);
     $("quickstart").textContent =

@@ -41,6 +41,9 @@ for the remaining enterprise features.
 | `internal/player`    | Embedded HTML5 player page and assets |
 | `internal/api`       | REST control plane (streams, security, stats) |
 | `internal/transcode` | FFmpeg ABR ladder: pipes FLV to FFmpeg and serves the HLS renditions |
+| `internal/recorder`  | Records a stream's FLV and uploads it to storage |
+| `internal/storage`   | Object storage abstraction (local disk, S3/MinIO) |
+| `internal/flv`       | FLV container framing shared by transcode and recorder |
 | `internal/webhook`   | Asynchronous lifecycle webhook dispatcher |
 | `internal/server`    | Composition root: wires every subsystem into one HTTP server |
 | `pkg/id`, `pkg/logger` | Identifier generation and structured logging |
@@ -123,6 +126,19 @@ handler mints a token server-side, so playback via `/player.html` keeps working,
 while direct requests without a valid token receive `401`. The API and dashboard
 can also mint tokens for external players.
 
+## Recording and storage
+
+When `recording.enabled` is set, the RTMP session's raw FLV tags are also
+forwarded (through `rtmp.MultiFLVSink`) to a `recorder.Session`, which frames
+them into an FLV file via `internal/flv`. On unpublish the file is uploaded to
+the configured `storage.Store` — `LocalStore` writes under `local_root`, while
+`S3Store` uses MinIO's S3 client and creates the bucket on first use — and the
+working copy is removed. Recordings are listed and deleted via
+`/api/v1/recordings` and, for the local driver, served at `/recordings/<key>`.
+
+Because the FLV fan-out feeds both the transcoder and the recorder, a single
+publish can be recorded and transcoded into HLS/DASH at the same time.
+
 ## Embedding security
 
 Two independent layers enforce iframe restrictions:
@@ -190,5 +206,5 @@ path never needs to change.
 | HLS/DASH packaging | ✅ MVP | HLS master+variants and DASH MPD produced by the ABR pipeline (video-only) |
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |
 | Redis clustering | ✅ MVP | Node registry + TTL heartbeats; cross-node stream routing pending |
-| Recording + S3 sync | ⏳ | Config present; recorder pending |
+| Recording + S3 sync | ✅ MVP | Raw FLV recording uploaded to local/S3 storage on unpublish |
 | Trickle ICE / simulcast | ⏳ | Reduces setup latency, improves large-scale fan-out |

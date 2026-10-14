@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/johndesu090/ari-media-engine/internal/flv"
 )
 
 // Manager owns the FFmpeg transcode sessions for the process.
@@ -81,7 +83,7 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 		writers = append(writers, stdin)
 	}
 
-	s.flv = newFLVWriter(io.MultiWriter(writers...))
+	s.flv = flv.NewWriter(io.MultiWriter(writers...))
 	m.sessions[streamKey] = s
 	m.log.Info("transcode session started", "stream", streamKey, "renditions", len(m.cfg.Renditions), "formats", formatNames(formats))
 	return s, nil
@@ -145,7 +147,7 @@ type proc struct {
 type Session struct {
 	streamKey string
 	procs     []*proc
-	flv       *flvWriter
+	flv       *flv.Writer
 	log       *slog.Logger
 
 	mu     sync.Mutex
@@ -160,7 +162,7 @@ func (s *Session) WriteFLVTag(tagType uint8, timestamp uint32, data []byte) erro
 	if s.closed || s.flv == nil {
 		return nil
 	}
-	return s.flv.writeTag(tagType, timestamp, data)
+	return s.flv.WriteTag(tagType, timestamp, data)
 }
 
 // Close closes every FFmpeg input and waits for the processes to exit, killing

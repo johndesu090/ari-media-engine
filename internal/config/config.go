@@ -27,6 +27,7 @@ type Config struct {
 	Webhooks  WebhookConfig   `yaml:"webhooks"`
 	Transcode TranscodeConfig `yaml:"transcode"`
 	Token     TokenConfig     `yaml:"token"`
+	Recording RecordingConfig `yaml:"recording"`
 }
 
 // ServerConfig controls the HTTP management/API server.
@@ -60,11 +61,20 @@ type LogConfig struct {
 type StorageConfig struct {
 	Driver      string `yaml:"driver"`
 	LocalRoot   string `yaml:"local_root"`
+	PublicBase  string `yaml:"public_base"`
 	S3Endpoint  string `yaml:"s3_endpoint"`
 	S3Bucket    string `yaml:"s3_bucket"`
 	S3Region    string `yaml:"s3_region"`
 	S3AccessKey string `yaml:"s3_access_key"`
 	S3SecretKey string `yaml:"s3_secret_key"`
+	S3UseSSL    bool   `yaml:"s3_use_ssl"`
+}
+
+// RecordingConfig controls stream recording.
+type RecordingConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	AutoRecord bool   `yaml:"auto_record"`
+	WorkDir    string `yaml:"work_dir"`
 }
 
 // ClusterConfig controls horizontal scaling state.
@@ -209,6 +219,11 @@ func Default() Config {
 		},
 		Webhooks: WebhookConfig{Enabled: false},
 		Token:    TokenConfig{Enabled: false, TTL: 3600},
+		Recording: RecordingConfig{
+			Enabled:    false,
+			AutoRecord: true,
+			WorkDir:    "./data/recordings",
+		},
 		Transcode: TranscodeConfig{
 			Enabled:    false,
 			FFmpegPath: "ffmpeg",
@@ -274,6 +289,11 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Token.Secret, "ARI_TOKEN_SECRET")
 	setInt(&cfg.Token.TTL, "ARI_TOKEN_TTL_SEC")
 	setString(&cfg.Player.DashJSURL, "ARI_PLAYER_DASH_JS_URL")
+	setBool(&cfg.Recording.Enabled, "ARI_RECORDING_ENABLED")
+	setBool(&cfg.Recording.AutoRecord, "ARI_RECORDING_AUTO")
+	setString(&cfg.Recording.WorkDir, "ARI_RECORDING_WORK_DIR")
+	setString(&cfg.Storage.PublicBase, "ARI_STORAGE_PUBLIC_BASE")
+	setBool(&cfg.Storage.S3UseSSL, "ARI_STORAGE_S3_USE_SSL")
 }
 
 func setStringSlice(dst *[]string, key string) {

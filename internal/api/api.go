@@ -15,6 +15,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
+	"github.com/johndesu090/ari-media-engine/internal/storage"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
 	"github.com/johndesu090/ari-media-engine/internal/webrtc"
 	"github.com/johndesu090/ari-media-engine/pkg/id"
@@ -22,34 +23,38 @@ import (
 
 // Options configures the API server.
 type Options struct {
-	Store      broadcast.Store
-	Engine     *webrtc.Engine
-	Policy     *delivery.DomainPolicy
-	Signer     *delivery.TokenSigner
-	Logger     *slog.Logger
-	Webhooks   *webhook.Dispatcher
-	Auth       config.AuthConfig
-	StartedAt  time.Time
-	Transcodes func() int
-	HLSBase    string
-	DashBase   string
-	Cluster    *cluster.Manager
+	Store        broadcast.Store
+	Engine       *webrtc.Engine
+	Policy       *delivery.DomainPolicy
+	Signer       *delivery.TokenSigner
+	Logger       *slog.Logger
+	Webhooks     *webhook.Dispatcher
+	Auth         config.AuthConfig
+	StartedAt    time.Time
+	Transcodes   func() int
+	HLSBase      string
+	DashBase     string
+	Cluster      *cluster.Manager
+	Recordings   storage.Store
+	RecordActive func() int
 }
 
 // Server exposes the REST API.
 type Server struct {
-	store      broadcast.Store
-	engine     *webrtc.Engine
-	policy     *delivery.DomainPolicy
-	signer     *delivery.TokenSigner
-	log        *slog.Logger
-	webhooks   *webhook.Dispatcher
-	auth       config.AuthConfig
-	startedAt  time.Time
-	transcodes func() int
-	hlsBase    string
-	dashBase   string
-	cluster    *cluster.Manager
+	store        broadcast.Store
+	engine       *webrtc.Engine
+	policy       *delivery.DomainPolicy
+	signer       *delivery.TokenSigner
+	log          *slog.Logger
+	webhooks     *webhook.Dispatcher
+	auth         config.AuthConfig
+	startedAt    time.Time
+	transcodes   func() int
+	hlsBase      string
+	dashBase     string
+	cluster      *cluster.Manager
+	recordings   storage.Store
+	recordActive func() int
 }
 
 // New constructs the API server.
@@ -63,18 +68,20 @@ func New(opts Options) *Server {
 		startedAt = time.Now().UTC()
 	}
 	return &Server{
-		store:      opts.Store,
-		engine:     opts.Engine,
-		policy:     opts.Policy,
-		signer:     opts.Signer,
-		log:        log,
-		webhooks:   opts.Webhooks,
-		auth:       opts.Auth,
-		startedAt:  startedAt,
-		transcodes: opts.Transcodes,
-		hlsBase:    opts.HLSBase,
-		dashBase:   opts.DashBase,
-		cluster:    opts.Cluster,
+		store:        opts.Store,
+		engine:       opts.Engine,
+		policy:       opts.Policy,
+		signer:       opts.Signer,
+		log:          log,
+		webhooks:     opts.Webhooks,
+		auth:         opts.Auth,
+		startedAt:    startedAt,
+		transcodes:   opts.Transcodes,
+		hlsBase:      opts.HLSBase,
+		dashBase:     opts.DashBase,
+		cluster:      opts.Cluster,
+		recordings:   opts.Recordings,
+		recordActive: opts.RecordActive,
 	}
 }
 
@@ -94,6 +101,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.Handle("GET /api/v1/stats", protect(s.handleStats))
 	mux.Handle("GET /api/v1/cluster/nodes", protect(s.handleClusterNodes))
+	mux.Handle("GET /api/v1/recordings", protect(s.handleListRecordings))
+	mux.Handle("DELETE /api/v1/recordings/{key...}", protect(s.handleDeleteRecording))
 
 	mux.Handle("GET /api/v1/streams", protect(s.handleListStreams))
 	mux.Handle("POST /api/v1/streams", protect(s.handleCreateStream))
@@ -174,7 +183,42 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 			payload["nodes"] = len(nodes)
 		}
 	}
+	if s.recordActive != nil {
+		payload["recording"] = s.recordActive()
+	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleListRecordings lists stored recordings.
+func (s *Server) handleListRecordings(w http.ResponseWriter, _ *http.Request) {
+	if s.recordings == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "count": 0, "recordings": []any{}})
+		return
+	}
+	objs, err := s.recordings.List(rctx(), "")
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "storage_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "count": len(objs), "recordings": objs})
+}
+
+// handleDeleteRecording removes a recording by storage key.
+func (s *Server) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
+	if s.recordings == nil {
+		writeError(w, http.StatusServiceUnavailable, "storage_unavailable", "recording storage is not configured")
+		return
+	}
+	key := r.PathValue("key")
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "invalid_key", "recording key is required")
+		return
+	}
+	if err := s.recordings.Delete(rctx(), key); err != nil {
+		writeError(w, http.StatusInternalServerError, "storage_error", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleClusterNodes returns the current cluster membership.

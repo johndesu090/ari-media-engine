@@ -35,6 +35,35 @@ type FLVSink interface {
 	Close()
 }
 
+// MultiFLVSink forwards each tag to every non-nil sink. It is a no-op when no
+// sinks are supplied.
+func MultiFLVSink(sinks ...FLVSink) FLVSink {
+	var live []FLVSink
+	for _, s := range sinks {
+		if s != nil {
+			live = append(live, s)
+		}
+	}
+	return &multiFLVSink{sinks: live}
+}
+
+type multiFLVSink struct{ sinks []FLVSink }
+
+func (m *multiFLVSink) WriteFLVTag(tagType uint8, timestamp uint32, data []byte) error {
+	for _, s := range m.sinks {
+		if err := s.WriteFLVTag(tagType, timestamp, data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *multiFLVSink) Close() {
+	for _, s := range m.sinks {
+		s.Close()
+	}
+}
+
 // SinkFactory opens a media sink when a publisher starts.
 type SinkFactory interface {
 	Open(streamKey string) (MediaSink, error)

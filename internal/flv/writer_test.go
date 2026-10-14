@@ -1,4 +1,4 @@
-package transcode
+package flv
 
 import (
 	"bytes"
@@ -6,15 +6,15 @@ import (
 	"testing"
 )
 
-func TestFLVWriterFraming(t *testing.T) {
+func TestWriterFraming(t *testing.T) {
 	var buf bytes.Buffer
-	f := newFLVWriter(&buf)
-	if err := f.writeTag(9, 0, []byte{0x17, 0x00, 0x00, 0x00, 0x00}); err != nil {
+	f := NewWriter(&buf)
+	if err := f.WriteTag(9, 0, []byte{0x17, 0x00, 0x00, 0x00, 0x00}); err != nil {
 		t.Fatal(err)
 	}
 
 	out := buf.Bytes()
-	want := 9 + 4 + 11 + 5 + 4 // header + prevTag0 + tag header + data + prevTag
+	want := 9 + 4 + 11 + 5 + 4
 	if len(out) != want {
 		t.Fatalf("len = %d, want %d", len(out), want)
 	}
@@ -36,17 +36,20 @@ func TestFLVWriterFraming(t *testing.T) {
 	}
 }
 
-func TestFLVWriterHeaderWrittenOnce(t *testing.T) {
+func TestWriterHeaderWrittenOnce(t *testing.T) {
 	var buf bytes.Buffer
-	f := newFLVWriter(&buf)
-	if err := f.writeTag(9, 0, []byte{1}); err != nil {
+	f := NewWriter(&buf)
+	if err := f.WriteTag(9, 0, []byte{1}); err != nil {
 		t.Fatal(err)
 	}
 	first := buf.Len()
-	if err := f.writeTag(8, 0, []byte{2}); err != nil {
+	if err := f.WriteTag(8, 0, []byte{2}); err != nil {
 		t.Fatal(err)
 	}
 	if got := buf.Len() - first; got != 11+1+4 {
 		t.Fatalf("second tag size = %d, want %d", got, 11+1+4)
+	}
+	if !f.Started() {
+		t.Fatal("Started() = false after writing")
 	}
 }

@@ -1,23 +1,27 @@
-package transcode
+// Package flv frames media tags into the FLV container format used by RTMP.
+// It is shared by the transcoder (piping to FFmpeg) and the recorder (writing
+// to disk or object storage).
+package flv
 
 import (
 	"encoding/binary"
 	"io"
 )
 
-// flvWriter frames RTMP media messages into an FLV byte stream for FFmpeg. The
-// FLV container is written lazily on the first tag so that an FLV header is only
+// Writer frames media tags into an FLV byte stream. The 9-byte FLV header and
+// PreviousTagSize0 are written lazily on the first tag so that a header is only
 // emitted once media is actually available.
-type flvWriter struct {
+type Writer struct {
 	w       io.Writer
 	started bool
 }
 
-func newFLVWriter(w io.Writer) *flvWriter { return &flvWriter{w: w} }
+// NewWriter wraps w in an FLV Writer.
+func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
 
-// writeTag writes an FLV tag (11-byte header + body + 4-byte previous-tag size),
-// emitting the 9-byte FLV header and PreviousTagSize0 on the first call.
-func (f *flvWriter) writeTag(tagType uint8, timestamp uint32, data []byte) error {
+// WriteTag writes an FLV tag: an 11-byte tag header, the body and a 4-byte
+// previous-tag size. tagType is 8 (audio), 9 (video) or 18 (script data).
+func (f *Writer) WriteTag(tagType uint8, timestamp uint32, data []byte) error {
 	if !f.started {
 		// "FLV", version 1, flags (audio|video = 0x05), header size 9.
 		if _, err := f.w.Write([]byte{'F', 'L', 'V', 0x01, 0x05, 0x00, 0x00, 0x00, 0x09}); err != nil {
@@ -53,3 +57,6 @@ func (f *flvWriter) writeTag(tagType uint8, timestamp uint32, data []byte) error
 	_, err := f.w.Write(prev[:])
 	return err
 }
+
+// Started reports whether the FLV header has been written.
+func (f *Writer) Started() bool { return f.started }

@@ -27,11 +27,14 @@ log:
 storage:
   driver: local          # local | s3
   local_root: ./data/recordings
+  # public_base prefixes recording URLs, e.g. https://media.example.com/recordings
+  public_base: ""
   s3_endpoint: ""
   s3_bucket: ""
   s3_region: ""
   s3_access_key: ""
   s3_secret_key: ""
+  s3_use_ssl: false
 
 cluster:
   enabled: false
@@ -122,3 +125,10 @@ token:
   enabled: false
   secret: ""
   ttl_sec: 3600
+
+# Stream recording. When enabled, each publisher's raw FLV is recorded and
+# uploaded to the configured storage backend (local or S3) on unpublish.
+recording:
+  enabled: false
+  auto_record: true
+  work_dir: ./data/recordings

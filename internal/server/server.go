@@ -21,7 +21,9 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/ingest"
 	"github.com/johndesu090/ari-media-engine/internal/ingest/rtmp"
 	"github.com/johndesu090/ari-media-engine/internal/player"
+	"github.com/johndesu090/ari-media-engine/internal/recorder"
 	"github.com/johndesu090/ari-media-engine/internal/signaling"
+	"github.com/johndesu090/ari-media-engine/internal/storage"
 	"github.com/johndesu090/ari-media-engine/internal/transcode"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
 	"github.com/johndesu090/ari-media-engine/internal/webrtc"
@@ -41,6 +43,8 @@ type Server struct {
 	transcoder  *transcode.Manager
 	rtmpHandler ingest.Handler
 	cluster     *cluster.Manager
+	recorder    *recorder.Manager
+	objectStore storage.Store
 
 	http *http.Server
 }
@@ -120,9 +124,24 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("server: player: %w", err)
 	}
 
+	// Object storage for recordings.
+	objectStore, err := storage.New(storage.Config{
+		Driver:      cfg.Storage.Driver,
+		LocalRoot:   cfg.Storage.LocalRoot,
+		PublicBase:  cfg.Storage.PublicBase,
+		S3Endpoint:  cfg.Storage.S3Endpoint,
+		S3Bucket:    cfg.Storage.S3Bucket,
+		S3Region:    cfg.Storage.S3Region,
+		S3AccessKey: cfg.Storage.S3AccessKey,
+		S3SecretKey: cfg.Storage.S3SecretKey,
+		S3UseSSL:    cfg.Storage.S3UseSSL,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("server: storage: %w", err)
+	}
+
 	// ABR transcoding pipeline (optional).
 	var transcoder *transcode.Manager
-	var newFLVSink func(streamKey string) (rtmp.FLVSink, error)
 	if cfg.Transcode.Enabled {
 		transcoder = transcode.New(transcode.Config{
 			FFmpegPath: cfg.Transcode.FFmpegPath,
@@ -132,19 +151,43 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 			Preset:     cfg.Transcode.Preset,
 			Renditions: toRenditions(cfg.Transcode.Renditions),
 		}, log)
+	}
+
+	// Recording pipeline (optional).
+	var rec *recorder.Manager
+	if cfg.Recording.Enabled {
+		rec = recorder.New(recorder.Options{
+			Store:   objectStore,
+			WorkDir: cfg.Recording.WorkDir,
+			Logger:  log,
+		})
+	}
+
+	// The FLV fan-out sink feeds transcoding and/or recording.
+	var newFLVSink func(streamKey string) (rtmp.FLVSink, error)
+	if transcoder != nil || rec != nil {
 		newFLVSink = func(streamKey string) (rtmp.FLVSink, error) {
-			formats := deliveryFormats(deliveryOf(streamKey))
-			if formats == 0 {
+			var sinks []rtmp.FLVSink
+			if transcoder != nil {
+				if formats := deliveryFormats(deliveryOf(streamKey)); formats != 0 {
+					if s, err := transcoder.Start(streamKey, formats); err != nil {
+						log.Warn("transcode sink unavailable", "stream", streamKey, "err", err)
+					} else if s != nil {
+						sinks = append(sinks, s)
+					}
+				}
+			}
+			if rec != nil && cfg.Recording.AutoRecord {
+				if s, err := rec.Start(streamKey); err != nil {
+					log.Warn("recorder sink unavailable", "stream", streamKey, "err", err)
+				} else if s != nil {
+					sinks = append(sinks, s)
+				}
+			}
+			if len(sinks) == 0 {
 				return nil, nil
 			}
-			session, err := transcoder.Start(streamKey, formats)
-			if err != nil {
-				return nil, err
-			}
-			if session == nil {
-				return nil, nil
-			}
-			return session, nil
+			return rtmp.MultiFLVSink(sinks...), nil
 		}
 	}
 
@@ -153,6 +196,12 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 			return 0
 		}
 		return len(transcoder.Active())
+	}
+	recordings := func() int {
+		if rec == nil {
+			return 0
+		}
+		return len(rec.Active())
 	}
 
 	// Cluster membership (optional).
@@ -202,9 +251,13 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		Auth:       cfg.Auth,
 		StartedAt:  time.Now().UTC(),
 		Transcodes: transcodes,
-		HLSBase:    cfg.Player.HLSBase,
-		DashBase:   cfg.Player.DashBase,
-		Cluster:    clusterMgr,
+		Recordings: objectStore,
+		RecordActive: func() int {
+			return recordings()
+		},
+		HLSBase:  cfg.Player.HLSBase,
+		DashBase: cfg.Player.DashBase,
+		Cluster:  clusterMgr,
 	})
 
 	root := http.NewServeMux()
@@ -236,26 +289,38 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		}
 	}
 
+	// Recordings served from local storage (local driver only).
+	if cfg.Recording.Enabled && cfg.Storage.Driver == "local" && cfg.Storage.LocalRoot != "" {
+		root.Handle("GET /recordings/", http.StripPrefix("/recordings/", http.FileServer(http.Dir(cfg.Storage.LocalRoot))))
+	}
+
 	// Management dashboard (static assets).
 	registerDashboard(root, cfg.Server.DashboardDir)
 
 	handler := delivery.SecurityHeaders()(root)
 
 	return &Server{
-		cfg:        cfg,
-		log:        log,
-		engine:     engine,
-		store:      store,
-		policy:     policy,
-		ingest:     ingest.New(log),
-		transcoder: transcoder,
-		cluster:    clusterMgr,
+		cfg:         cfg,
+		log:         log,
+		engine:      engine,
+		store:       store,
+		policy:      policy,
+		ingest:      ingest.New(log),
+		transcoder:  transcoder,
+		cluster:     clusterMgr,
+		recorder:    rec,
+		objectStore: objectStore,
 		rtmpHandler: ingest.NewRTMPHandler(ingest.RTMPOptions{
 			Engine: engine,
 			Logger: log,
 			Hooks: ingest.RTMPHooks{
-				OnPublish:   func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusLive) },
-				OnUnpublish: func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusEnded) },
+				OnPublish: func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusLive) },
+				OnUnpublish: func(streamKey string) {
+					upsertStream(store, streamKey, broadcast.StatusEnded)
+					if rec != nil {
+						rec.Stop(streamKey)
+					}
+				},
 			},
 			NewFLVSink: newFLVSink,
 		}),
@@ -337,6 +402,12 @@ func (s *Server) shutdown() {
 	}
 	if s.transcoder != nil {
 		s.transcoder.StopAll()
+	}
+	if s.recorder != nil {
+		s.recorder.StopAll()
+	}
+	if s.objectStore != nil {
+		_ = s.objectStore.Close()
 	}
 	if s.cluster != nil {
 		clusterCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
