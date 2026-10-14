@@ -44,7 +44,8 @@ when they finish. The sections below document the manual steps and every option.
 
 | Port                 | Protocol | Purpose                                  |
 | -------------------- | -------- | ---------------------------------------- |
-| `8080`               | TCP      | HTTP API, dashboard, player, `/ws` signaling, `/p2p/ws` |
+| `80` (default)       | TCP      | HTTP API, dashboard, player, `/ws` signaling, `/p2p/ws` |
+| `443`                | TCP      | HTTPS when `server.tls_cert_file` / `tls_key_file` are set |
 | `1935`               | TCP      | RTMP ingest                              |
 | `8890`               | UDP+TCP  | SRT ingest                               |
 | `8554`               | TCP      | RTSP listener (if enabled)               |
@@ -57,6 +58,40 @@ when they finish. The sections below document the manual steps and every option.
 > value published by Docker.
 
 ---
+
+## Cloudflare and TLS
+
+The engine speaks plain HTTP by default (port `80`). Cloudflare's SSL/TLS mode
+determines how it reaches your origin:
+
+| Cloudflare mode   | Origin leg | Origin requirement |
+| ----------------- | ---------- | ------------------ |
+| **Flexible**      | HTTP :80   | Serve HTTP on port 80 (the default) |
+| **Full**          | HTTPS :443 | Serve HTTPS on 443 (cert not validated) |
+| **Full (strict)** | HTTPS :443 | Serve HTTPS on 443 with a valid/Origin certificate |
+
+A **521 "web server is down"** with Full or Full (strict) means nothing is
+answering **HTTPS on 443** at the origin. Fixes:
+
+- **Quick:** set SSL/TLS to **Flexible** and keep the engine on port 80 (HTTP).
+- **Recommended:** install a **Cloudflare Origin Certificate** and enable TLS in
+  the engine:
+
+  ```yaml
+  server:
+    port: 443
+    tls_cert_file: /etc/ari/origin.pem
+    tls_key_file: /etc/ari/origin.key
+  ```
+
+  or pass them to the installer:
+  `ARI_HTTP_PORT=443 ARI_TLS_CERT=/etc/ari/origin.pem ARI_TLS_KEY=/etc/ari/origin.key sudo ./scripts/install-ubuntu.sh`.
+  Then select **Full (strict)**.
+
+Cloudflare must be able to reach the origin: allow Cloudflare's IP ranges (or all
+traffic on 80/443) in your firewall/security group. **WebRTC media is UDP and is
+not proxied by Cloudflare** — keep `7881/tcp` and `50000-50100/udp` open
+directly to the origin.
 
 ## Production configuration
 

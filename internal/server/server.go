@@ -438,12 +438,23 @@ func (s *Server) Run(ctx context.Context) error {
 
 	errc := make(chan error, 1)
 	go func() {
+		scheme := "http"
+		if s.cfg.Server.TLSCertFile != "" {
+			scheme = "https"
+		}
 		s.log.Info("http server listening",
+			"scheme", scheme,
 			"addr", s.Addr(),
 			"player", "/player.html?id=STREAM_ID",
 			"signaling", s.cfg.Player.WSPath,
 		)
-		if err := s.http.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if s.cfg.Server.TLSCertFile != "" && s.cfg.Server.TLSKeyFile != "" {
+			err = s.http.ListenAndServeTLS(s.cfg.Server.TLSCertFile, s.cfg.Server.TLSKeyFile)
+		} else {
+			err = s.http.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
 	}()

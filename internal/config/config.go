@@ -54,6 +54,9 @@ type ServerConfig struct {
 	ShutdownTimeoutSec int    `yaml:"shutdown_timeout_sec"`
 	DashboardDir       string `yaml:"dashboard_dir"`
 	PublicURL          string `yaml:"public_url"`
+	// TLSCertFile and TLSKeyFile enable HTTPS when both are set.
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
 }
 
 // WebRTCConfig controls the Pion WebRTC transport.
@@ -293,6 +296,8 @@ func applyEnv(cfg *Config) {
 	setInt(&cfg.Server.Port, "ARI_SERVER_PORT")
 	setString(&cfg.Server.PublicURL, "ARI_SERVER_PUBLIC_URL")
 	setString(&cfg.Server.DashboardDir, "ARI_DASHBOARD_DIR")
+	setString(&cfg.Server.TLSCertFile, "ARI_TLS_CERT_FILE")
+	setString(&cfg.Server.TLSKeyFile, "ARI_TLS_KEY_FILE")
 	setStringSlice(&cfg.WebRTC.ICEPublicIPs, "ARI_ICE_PUBLIC_IPS")
 	setInt(&cfg.WebRTC.ICETCPPort, "ARI_ICE_TCP_PORT")
 	setInt(&cfg.WebRTC.ICEUDPPortMin, "ARI_ICE_UDP_PORT_MIN")
@@ -390,6 +395,9 @@ func setBool(dst *bool, key string) {
 func (c Config) Validate() error {
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("config: server.port %d out of range", c.Server.Port)
+	}
+	if (c.Server.TLSCertFile == "") != (c.Server.TLSKeyFile == "") {
+		return fmt.Errorf("config: server.tls_cert_file and server.tls_key_file must be set together")
 	}
 	if c.WebRTC.ICEUDPPortMin > c.WebRTC.ICEUDPPortMax {
 		return fmt.Errorf("config: webrtc.ice_udp_port_min %d greater than max %d",

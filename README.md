@@ -76,8 +76,12 @@ ARI_PUBLIC_IP=203.0.113.10 ARI_ENABLE_TOKEN=1 ./scripts/deploy-docker.sh
 > and the same for `deploy-docker.sh` (it clones the repo itself).
 
 The dashboard requires a login when authentication is enabled (the deploy
-scripts enable it and generate an `admin` password). Full manual steps — nginx
-TLS, Redis, MinIO/S3, Compose — are in **[`docs/deployment.md`](docs/deployment.md)**.
+scripts enable it and generate an `admin` password). The Ubuntu installer serves
+on **port 80** (HTTP) by default; set `ARI_DOMAIN` for the public URL and
+`ARI_TLS_CERT` / `ARI_TLS_KEY` to serve HTTPS directly. Behind **Cloudflare**,
+use **Flexible** for an HTTP origin or **Full (strict)** with an Origin
+Certificate and TLS enabled. Full manual steps — nginx, Redis, MinIO/S3, Compose,
+and Cloudflare modes — are in **[`docs/deployment.md`](docs/deployment.md)**.
 
 ---
 

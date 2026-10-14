@@ -10,6 +10,9 @@ server:
   dashboard_dir: web/dashboard
   # public_url is advertised to players and embed snippets (e.g. https://media.example.com).
   public_url: ""
+  # Set both to serve HTTPS directly (e.g. behind Cloudflare Full or a load balancer).
+  tls_cert_file: ""
+  tls_key_file: ""
 
 webrtc:
   # Advertised host candidates for NAT traversal (set to your public IP(s) in production).

@@ -12,12 +12,14 @@
 #   ARI_DOMAIN         Public hostname for HTTPS embeds (e.g. media.example.com)
 #   ARI_PUBLIC_URL     Full public base URL (default http://<public-ip>:<port>)
 #   ARI_PUBLIC_IP      Public IP advertised for WebRTC ICE (auto-detected)
-#   ARI_HTTP_PORT      HTTP/API port (default 8080)
+#   ARI_HTTP_PORT      HTTP/API port (default 80)
 #   ARI_RTMP_PORT      RTMP ingest port (default 1935)
 #   ARI_SRT_PORT       SRT ingest port (default 8890)
 #   ARI_ICE_TCP_PORT   ICE-TCP port (default 7881)
 #   ARI_ICE_UDP_MIN    ICE UDP range start (default 50000)
 #   ARI_ICE_UDP_MAX    ICE UDP range end (default 50100)
+#   ARI_TLS_CERT       TLS certificate path (enables HTTPS)
+#   ARI_TLS_KEY        TLS private key path
 #   ARI_ENABLE_AUTH    1 to require dashboard login (default 1)
 #   ARI_ADMIN_USER     dashboard username (default admin)
 #   ARI_ADMIN_PASSWORD dashboard password (prompted; auto-generated if blank)
@@ -32,12 +34,14 @@ set -euo pipefail
 ARI_REPO_URL="${ARI_REPO_URL:-https://github.com/johndesu090/ari-media-engine.git}"
 ARI_REF="${ARI_REF:-main}"
 ARI_INSTALL_DIR="${ARI_INSTALL_DIR:-/opt/ari}"
-ARI_HTTP_PORT="${ARI_HTTP_PORT:-8080}"
+ARI_HTTP_PORT="${ARI_HTTP_PORT:-80}"
 ARI_RTMP_PORT="${ARI_RTMP_PORT:-1935}"
 ARI_SRT_PORT="${ARI_SRT_PORT:-8890}"
 ARI_ICE_TCP_PORT="${ARI_ICE_TCP_PORT:-7881}"
 ARI_ICE_UDP_MIN="${ARI_ICE_UDP_MIN:-50000}"
 ARI_ICE_UDP_MAX="${ARI_ICE_UDP_MAX:-50100}"
+ARI_TLS_CERT="${ARI_TLS_CERT:-}"
+ARI_TLS_KEY="${ARI_TLS_KEY:-}"
 ARI_ENABLE_AUTH="${ARI_ENABLE_AUTH:-1}"
 ARI_ENABLE_TOKEN="${ARI_ENABLE_TOKEN:-0}"
 ARI_ENABLE_CLUSTER="${ARI_ENABLE_CLUSTER:-0}"
@@ -201,6 +205,13 @@ ARI_REDIS_URL=redis://127.0.0.1:6379/0
 EOF
   chmod 600 /etc/ari/ari.env
 
+  if [ -n "${ARI_TLS_CERT}" ] && [ -n "${ARI_TLS_KEY}" ]; then
+    {
+      echo "ARI_TLS_CERT_FILE=${ARI_TLS_CERT}"
+      echo "ARI_TLS_KEY_FILE=${ARI_TLS_KEY}"
+    } >> /etc/ari/ari.env
+  fi
+
   echo
   log "Configuration summary"
   echo "    public URL   : ${public_url}"
@@ -233,6 +244,8 @@ ExecStart=/usr/local/bin/ari -config /etc/ari/config.yaml
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=65536
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -246,26 +259,32 @@ open_firewall() {
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
     log "Opening firewall ports (ufw)"
     ufw allow "${ARI_HTTP_PORT}/tcp"          >/dev/null 2>&1 || true
+    ufw allow 443/tcp                         >/dev/null 2>&1 || true
     ufw allow "${ARI_RTMP_PORT}/tcp"          >/dev/null 2>&1 || true
     ufw allow "${ARI_SRT_PORT}/udp"           >/dev/null 2>&1 || true
     ufw allow "${ARI_SRT_PORT}/tcp"           >/dev/null 2>&1 || true
     ufw allow "${ARI_ICE_TCP_PORT}/tcp"       >/dev/null 2>&1 || true
     ufw allow "${ARI_ICE_UDP_MIN}:${ARI_ICE_UDP_MAX}/udp" >/dev/null 2>&1 || true
   else
-    warn "ufw is not active; open ports ${ARI_HTTP_PORT}/tcp, ${ARI_RTMP_PORT}/tcp, ${ARI_SRT_PORT}/udp+tcp, ${ARI_ICE_TCP_PORT}/tcp, ${ARI_ICE_UDP_MIN}-${ARI_ICE_UDP_MAX}/udp manually"
+    warn "ufw is not active; open ports ${ARI_HTTP_PORT}/tcp, 443/tcp, ${ARI_RTMP_PORT}/tcp, ${ARI_SRT_PORT}/udp+tcp, ${ARI_ICE_TCP_PORT}/tcp, ${ARI_ICE_UDP_MIN}-${ARI_ICE_UDP_MAX}/udp manually"
   fi
 }
 
 verify() {
   log "Waiting for the engine to come up"
+  local scheme="http" curl_flags=()
+  if [ -n "${ARI_TLS_CERT}" ] && [ -n "${ARI_TLS_KEY}" ]; then
+    scheme="https"
+    curl_flags=(-k)
+  fi
   for _ in $(seq 1 20); do
-    if curl -fsS --max-time 2 "http://127.0.0.1:${ARI_HTTP_PORT}/healthz" >/dev/null 2>&1; then
+    if curl -fsS "${curl_flags[@]}" --max-time 2 "${scheme}://127.0.0.1:${ARI_HTTP_PORT}/healthz" >/dev/null 2>&1; then
       log "Ari Media Engine is running"
-      echo "    Dashboard: ${RESOLVED_PUBLIC_URL:-http://127.0.0.1:${ARI_HTTP_PORT}}/"
-      echo "    Health   : http://127.0.0.1:${ARI_HTTP_PORT}/healthz"
+      echo "    Dashboard: ${RESOLVED_PUBLIC_URL:-${scheme}://127.0.0.1:${ARI_HTTP_PORT}}/"
+      echo "    Health   : ${scheme}://127.0.0.1:${ARI_HTTP_PORT}/healthz"
       echo "    Logs     : journalctl -u ari -f"
       if [ -n "${ARI_DOMAIN:-}" ]; then
-        warn "public URL uses https://${ARI_DOMAIN}: put nginx (or another TLS proxy) in front of 127.0.0.1:${ARI_HTTP_PORT} - see docs/deployment.md"
+        warn "Cloudflare: set SSL/TLS to Flexible for an HTTP origin, or Full (strict) with an Origin Certificate and TLS enabled here - see docs/deployment.md"
       fi
       return 0
     fi
