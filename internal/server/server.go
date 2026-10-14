@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/johndesu090/ari-media-engine/internal/api"
+	"github.com/johndesu090/ari-media-engine/internal/audio"
 	"github.com/johndesu090/ari-media-engine/internal/broadcast"
 	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
@@ -46,6 +47,7 @@ type Server struct {
 	cluster     *cluster.Manager
 	recorder    *recorder.Manager
 	objectStore storage.Store
+	audio       *audio.Manager
 
 	http *http.Server
 }
@@ -167,8 +169,31 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		})
 	}
 
+	// AAC→Opus audio transcode for WebRTC subscribers (optional).
+	var audioMgr *audio.Manager
+	if cfg.Audio.Enabled {
+		audioMgr = audio.NewManager(audio.Options{
+			FFmpegPath: cfg.Transcode.FFmpegPath,
+			Bitrate:    cfg.Audio.Bitrate,
+			Logger:     log,
+		})
+	}
+
 	// The FLV fan-out sink feeds transcoding and/or recording.
 	var newFLVSink func(streamKey string) (rtmp.FLVSink, error)
+	var newAudioSink func(streamKey string, session *webrtc.IngestSession) (rtmp.FLVSink, error)
+	if audioMgr != nil {
+		newAudioSink = func(streamKey string, session *webrtc.IngestSession) (rtmp.FLVSink, error) {
+			s, err := audioMgr.Start(streamKey, session)
+			if err != nil {
+				return nil, err
+			}
+			if s == nil {
+				return nil, nil
+			}
+			return s, nil
+		}
+	}
 	if transcoder != nil || rec != nil {
 		newFLVSink = func(streamKey string) (rtmp.FLVSink, error) {
 			var sinks []rtmp.FLVSink
@@ -327,6 +352,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		cluster:     clusterMgr,
 		recorder:    rec,
 		objectStore: objectStore,
+		audio:       audioMgr,
 		rtmpHandler: ingest.NewRTMPHandler(ingest.RTMPOptions{
 			Engine: engine,
 			Logger: log,
@@ -339,7 +365,8 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 					}
 				},
 			},
-			NewFLVSink: newFLVSink,
+			NewFLVSink:   newFLVSink,
+			NewAudioSink: newAudioSink,
 		}),
 		http: &http.Server{
 			Addr:         cfg.Addr(),
@@ -422,6 +449,9 @@ func (s *Server) shutdown() {
 	}
 	if s.recorder != nil {
 		s.recorder.StopAll()
+	}
+	if s.audio != nil {
+		s.audio.StopAll()
 	}
 	if s.objectStore != nil {
 		_ = s.objectStore.Close()

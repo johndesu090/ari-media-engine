@@ -37,6 +37,7 @@ for the remaining enterprise features.
 | `internal/webrtc`    | Pion-based SFU: one publisher fanned out to many subscribers |
 | `internal/signaling` | WebSocket JSON signaling driving the SFU |
 | `internal/ingest`    | RTMP demux (handshake, chunks, AMF0, FLV → H.264) and SRT/RTSP listeners |
+| `internal/audio`     | AAC→Opus transcode (FFmpeg → Opus RTP) for WebRTC subscribers |
 | `internal/delivery`  | Embedding security: domain allow-list + CSP `frame-ancestors` + origin guard |
 | `internal/player`    | Embedded HTML5 player page and assets |
 | `internal/api`       | REST control plane (streams, security, stats) |
@@ -103,9 +104,17 @@ available; per-subscriber layer switching is a follow-up.
 Publish lifecycle (`OnPublish`/`OnUnpublish`) updates the control-plane
 `Broadcast` record, so RTMP streams appear in the REST API and dashboard.
 
-Remaining in this track: SRT and RTSP demuxing, and AAC→Opus audio transcoding
-(WebRTC browsers do not negotiate AAC, so RTMP→WebRTC currently carries H.264
-video).
+Remaining in this track: SRT and RTSP demuxing.
+
+## Audio path
+
+Browsers do not negotiate AAC, so RTMP→WebRTC audio requires transcoding. When
+`audio.enabled` is set, the RTMP session's raw FLV is also forwarded to an
+`audio.Session`, which pipes it to FFmpeg (`-vn -c:a libopus`) and directs the
+resulting Opus RTP to a loopback UDP port the session reads back. Each RTP
+packet is written to an Opus `TrackLocalStaticRTP` created on the ingest
+session (`EnsureAudioTrack`), so subscribers receive H.264 video and Opus audio
+together. The audio sink is best-effort: a failure never drops the video path.
 
 ## ABR transcoding
 
@@ -238,7 +247,7 @@ path never needs to change.
 | WebRTC SFU + signaling | ✅ MVP | Trickle ICE, RTP forwarding, simulcast reception |
 | Embed security + player | ✅ MVP | CSP + origin guard + embedded assets |
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
-| RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264→RTP works end-to-end; SRT/RTSP + AAC→Opus pending |
+| RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264 + AAC→Opus works end-to-end; SRT/RTSP pending |
 | ABR transcoding | ✅ MVP | FFmpeg FLV→HLS ladder, auto start/stop on publish |
 | HLS/DASH packaging | ✅ MVP | HLS master+variants and DASH MPD produced by the ABR pipeline (video-only) |
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |

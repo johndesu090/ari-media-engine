@@ -142,3 +142,9 @@ p2p:
   enabled: false
   ws_path: /p2p/ws
   max_peers: 4
+
+# AAC->Opus audio transcode so WebRTC subscribers receive audio (browsers do not
+# negotiate AAC). Requires ffmpeg; the RTMP video path is unaffected.
+audio:
+  enabled: false
+  bitrate: 96k

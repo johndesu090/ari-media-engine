@@ -3,6 +3,7 @@ package webrtc
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pion/rtp"
 	pion "github.com/pion/webrtc/v4"
@@ -26,11 +27,14 @@ type IngestSession struct {
 
 	mu     sync.Mutex
 	video  *pion.TrackLocalStaticRTP
+	audio  *pion.TrackLocalStaticRTP
 	sps    []byte
 	pps    []byte
 	seq    uint16
 	ts     uint32
 	closed bool
+
+	audioPackets atomic.Uint64
 }
 
 // Ingest opens a media-ingest session for streamID. It fails when the stream
@@ -103,6 +107,49 @@ func (s *IngestSession) WriteVideo(nalus [][]byte, ptsMillis uint32, keyframe bo
 	return nil
 }
 
+// EnsureAudioTrack creates and registers an Opus audio track for the session
+// (idempotent). RTMP AAC audio is transcoded to Opus by the audio pipeline and
+// forwarded here.
+func (s *IngestSession) EnsureAudioTrack() (*pion.TrackLocalStaticRTP, error) {
+	s.mu.Lock()
+	if s.audio != nil {
+		track := s.audio
+		s.mu.Unlock()
+		return track, nil
+	}
+	track, err := pion.NewTrackLocalStaticRTP(
+		pion.RTPCodecCapability{MimeType: pion.MimeTypeOpus, ClockRate: 48000, Channels: 2},
+		s.sessionID+"-audio", s.streamID,
+	)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("webrtc: create audio track: %w", err)
+	}
+	s.audio = track
+	s.mu.Unlock()
+
+	if st := s.stream(); st != nil {
+		st.addTrack(track)
+		st.scheduleLive()
+	}
+	return track, nil
+}
+
+// WriteAudioRTP forwards an Opus RTP packet to subscribers.
+func (s *IngestSession) WriteAudioRTP(pkt *rtp.Packet) error {
+	s.mu.Lock()
+	track := s.audio
+	s.mu.Unlock()
+	if track == nil {
+		return nil
+	}
+	s.audioPackets.Add(1)
+	return track.WriteRTP(pkt)
+}
+
+// AudioPackets returns the number of Opus RTP packets forwarded to subscribers.
+func (s *IngestSession) AudioPackets() uint64 { return s.audioPackets.Load() }
+
 // Close ends the ingest session and tears down its track.
 func (s *IngestSession) Close() {
 	s.mu.Lock()
@@ -112,6 +159,7 @@ func (s *IngestSession) Close() {
 	}
 	s.closed = true
 	s.video = nil
+	s.audio = nil
 	s.mu.Unlock()
 
 	if st := s.stream(); st != nil {

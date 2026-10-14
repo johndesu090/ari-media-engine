@@ -29,6 +29,13 @@ type Config struct {
 	Token     TokenConfig     `yaml:"token"`
 	Recording RecordingConfig `yaml:"recording"`
 	P2P       P2PConfig       `yaml:"p2p"`
+	Audio     AudioConfig     `yaml:"audio"`
+}
+
+// AudioConfig controls AAC→Opus transcoding so WebRTC subscribers receive audio.
+type AudioConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Bitrate string `yaml:"bitrate"`
 }
 
 // P2PConfig controls the peer-assisted delivery tracker.
@@ -239,6 +246,7 @@ func Default() Config {
 			WSPath:   "/p2p/ws",
 			MaxPeers: 4,
 		},
+		Audio: AudioConfig{Enabled: false, Bitrate: "96k"},
 		Transcode: TranscodeConfig{
 			Enabled:    false,
 			FFmpegPath: "ffmpeg",
@@ -313,6 +321,8 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.P2P.WSPath, "ARI_P2P_WS_PATH")
 	setInt(&cfg.P2P.MaxPeers, "ARI_P2P_MAX_PEERS")
 	setString(&cfg.Player.HLSJSURL, "ARI_PLAYER_HLS_JS_URL")
+	setBool(&cfg.Audio.Enabled, "ARI_AUDIO_ENABLED")
+	setString(&cfg.Audio.Bitrate, "ARI_AUDIO_BITRATE")
 }
 
 func setStringSlice(dst *[]string, key string) {

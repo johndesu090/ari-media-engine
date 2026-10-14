@@ -29,6 +29,9 @@ type RTMPOptions struct {
 	// NewFLVSink, when set, opens an additional sink that receives the raw FLV
 	// tag stream (used for transcoding and recording).
 	NewFLVSink func(streamKey string) (rtmp.FLVSink, error)
+	// NewAudioSink, when set, opens an audio sink bound to the stream's ingest
+	// session (used to transcode AAC audio to Opus for WebRTC).
+	NewAudioSink func(streamKey string, session *webrtc.IngestSession) (rtmp.FLVSink, error)
 }
 
 // RTMPHandler adapts RTMP publisher connections onto the WebRTC ingest pipeline.
@@ -44,7 +47,7 @@ func NewRTMPHandler(opts RTMPOptions) *RTMPHandler {
 	}
 	return &RTMPHandler{
 		server: &rtmp.Server{
-			Sinks:       &engineSinkFactory{engine: opts.Engine, newFLV: opts.NewFLVSink, log: log},
+			Sinks:       &engineSinkFactory{engine: opts.Engine, newFLV: opts.NewFLVSink, newAudio: opts.NewAudioSink, log: log},
 			Logger:      log,
 			OnPublish:   opts.Hooks.OnPublish,
 			OnUnpublish: opts.Hooks.OnUnpublish,
@@ -60,9 +63,10 @@ func (h *RTMPHandler) ServeConn(ctx context.Context, conn net.Conn, _ Protocol) 
 }
 
 type engineSinkFactory struct {
-	engine IngestEngine
-	newFLV func(string) (rtmp.FLVSink, error)
-	log    *slog.Logger
+	engine   IngestEngine
+	newFLV   func(string) (rtmp.FLVSink, error)
+	newAudio func(string, *webrtc.IngestSession) (rtmp.FLVSink, error)
+	log      *slog.Logger
 }
 
 func (f *engineSinkFactory) Open(streamKey string) (rtmp.MediaSink, error) {
@@ -72,12 +76,17 @@ func (f *engineSinkFactory) Open(streamKey string) (rtmp.MediaSink, error) {
 	}
 	sink := &engineSink{session: session}
 	if f.newFLV != nil {
-		extra, err := f.newFLV(streamKey)
-		if err != nil {
-			// A transcode/record failure must not drop the WebRTC stream.
-			f.log.Warn("extra sink unavailable", "stream", streamKey, "err", err)
-		} else {
-			sink.extra = extra
+		if extra, err := f.newFLV(streamKey); err != nil {
+			f.log.Warn("flv sink unavailable", "stream", streamKey, "err", err)
+		} else if extra != nil {
+			sink.extras = append(sink.extras, extra)
+		}
+	}
+	if f.newAudio != nil {
+		if extra, err := f.newAudio(streamKey, session); err != nil {
+			f.log.Warn("audio sink unavailable", "stream", streamKey, "err", err)
+		} else if extra != nil {
+			sink.extras = append(sink.extras, extra)
 		}
 	}
 	f.log.Info("rtmp ingest session opened", "stream", streamKey)
@@ -85,10 +94,10 @@ func (f *engineSinkFactory) Open(streamKey string) (rtmp.MediaSink, error) {
 }
 
 // engineSink fans demuxed media to the WebRTC engine and, optionally, raw FLV
-// tags to an additional sink (transcoder/recorder).
+// tags to additional sinks (transcoder, recorder, audio transcode).
 type engineSink struct {
 	session *webrtc.IngestSession
-	extra   rtmp.FLVSink
+	extras  []rtmp.FLVSink
 }
 
 func (s *engineSink) SetVideoConfig(sps, pps []byte) error {
@@ -100,15 +109,17 @@ func (s *engineSink) WriteVideo(nalus [][]byte, ptsMillis uint32, keyframe bool)
 }
 
 func (s *engineSink) WriteFLVTag(tagType uint8, timestamp uint32, data []byte) error {
-	if s.extra == nil {
-		return nil
+	for _, extra := range s.extras {
+		if err := extra.WriteFLVTag(tagType, timestamp, data); err != nil {
+			return err
+		}
 	}
-	return s.extra.WriteFLVTag(tagType, timestamp, data)
+	return nil
 }
 
 func (s *engineSink) Close() {
 	s.session.Close()
-	if s.extra != nil {
-		s.extra.Close()
+	for _, extra := range s.extras {
+		extra.Close()
 	}
 }
