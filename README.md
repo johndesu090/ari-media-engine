@@ -466,10 +466,20 @@ docs/                  Architecture and deployment documentation
 
 Ready to run it for real? See **[`docs/deployment.md`](docs/deployment.md)**.
 
-- **Ubuntu 24.04:** build from source, run under systemd, terminate TLS with
-  nginx, open the WebRTC UDP range, and add Redis for clustering.
-- **Docker:** a multi-stage image (static Go build + `ffmpeg` runtime) and a
-  Compose stack with Redis and MinIO.
+One-command deployment:
+
+```bash
+# Ubuntu 24.04 (build + systemd + firewall)
+sudo ./scripts/install-ubuntu.sh
+
+# Docker (build image + run container)
+./scripts/deploy-docker.sh
+```
+
+Both are configurable with environment variables (public IP/domain, ports,
+auth, tokenization). The guide also covers the manual Ubuntu 24.04 steps
+(systemd, ufw, nginx TLS, Redis) and the Docker Compose stack with Redis and
+MinIO.
 
 Quick start with Compose:
 

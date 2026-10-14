@@ -4,6 +4,42 @@ This guide covers production deployment on **Ubuntu 24.04** and with **Docker**.
 
 ---
 
+## One-command deployment
+
+**Ubuntu 24.04** — installs dependencies, builds, configures, and runs under
+systemd:
+
+```bash
+git clone https://github.com/johndesu090/ari-media-engine.git
+cd ari-media-engine
+sudo ./scripts/install-ubuntu.sh
+```
+
+Configure via environment variables, e.g.:
+
+```bash
+sudo ARI_DOMAIN=media.example.com ARI_ENABLE_AUTH=1 ./scripts/install-ubuntu.sh
+```
+
+**Docker** — builds the image and starts a container (host networking):
+
+```bash
+git clone https://github.com/johndesu090/ari-media-engine.git
+cd ari-media-engine
+./scripts/deploy-docker.sh
+```
+
+Configure via environment variables, e.g.:
+
+```bash
+ARI_PUBLIC_IP=203.0.113.10 ARI_ENABLE_TOKEN=1 ./scripts/deploy-docker.sh
+```
+
+Both scripts print the public URL, the generated API key, and the token secret
+when they finish. The sections below document the manual steps and every option.
+
+---
+
 ## Ports
 
 | Port                 | Protocol | Purpose                                  |
