@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// CookieName is the dashboard session cookie name.
+const CookieName = "ari_session"
+
 // Store is a concurrency-safe set of session tokens.
 type Store struct {
 	mu       sync.Mutex

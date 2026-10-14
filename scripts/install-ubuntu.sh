@@ -20,7 +20,7 @@
 #   ARI_ICE_UDP_MAX    ICE UDP range end (default 50100)
 #   ARI_ENABLE_AUTH    1 to require dashboard login (default 1)
 #   ARI_ADMIN_USER     dashboard username (default admin)
-#   ARI_ADMIN_PASSWORD dashboard password (generated when empty)
+#   ARI_ADMIN_PASSWORD dashboard password (prompted; auto-generated if blank)
 #   ARI_ENABLE_TOKEN   1 to tokenize HLS/DASH (default 0)
 #   ARI_ENABLE_CLUSTER 1 to enable Redis clustering (default 0)
 #   ARI_REPO_URL       Git URL (default the GitHub repo)
@@ -130,6 +130,30 @@ create_user_and_dirs() {
   mkdir -p /etc/ari /var/lib/ari/hls /var/lib/ari/recordings
   chown -R ari:ari /var/lib/ari
   chown -R ari:ari "${ARI_INSTALL_DIR}/web"
+}
+
+# prompt_admin_password asks for the dashboard password when auth is enabled and
+# no password was supplied. Piped runs (no TTY) fall back to auto-generation.
+prompt_admin_password() {
+  [ "${ARI_ENABLE_AUTH}" = "1" ] || return 0
+  [ -n "${ARI_ADMIN_PASSWORD}" ] && return 0
+  [ -t 0 ] || return 0
+
+  local p1 p2
+  while :; do
+    printf '\033[1;34m==>\033[0m Dashboard password for "%s" (leave blank to auto-generate): ' "${ARI_ADMIN_USER}"
+    read -rs p1 || true
+    printf '\n'
+    [ -z "$p1" ] && return 0
+    printf '    Confirm password: '
+    read -rs p2 || true
+    printf '\n'
+    if [ "$p1" = "$p2" ]; then
+      ARI_ADMIN_PASSWORD="$p1"
+      return 0
+    fi
+    warn "passwords do not match, try again"
+  done
 }
 
 write_config() {
@@ -261,6 +285,7 @@ main() {
   install_go
   fetch_and_build
   create_user_and_dirs
+  prompt_admin_password
   write_config
   install_service
   open_firewall

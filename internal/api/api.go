@@ -141,9 +141,6 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("PUT /api/v1/security/token", protect(s.handlePutTokenConfig))
 }
 
-// sessionCookie is the dashboard session cookie name.
-const sessionCookie = "ari_session"
-
 // requireAuth enforces authentication on control-plane routes. A request is
 // authorised by a matching API key (programmatic access) or a valid dashboard
 // session cookie (browser login).
@@ -160,7 +157,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.Valid(c.Value) {
+		if c, err := r.Cookie(auth.CookieName); err == nil && s.sessions.Valid(c.Value) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -198,7 +195,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token := s.sessions.Create()
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     auth.CookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
@@ -211,11 +208,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout clears the dashboard session.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if c, err := r.Cookie(auth.CookieName); err == nil {
 		s.sessions.Delete(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     auth.CookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -233,7 +230,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	authenticated := false
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if c, err := r.Cookie(auth.CookieName); err == nil {
 		authenticated = s.sessions.Valid(c.Value)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

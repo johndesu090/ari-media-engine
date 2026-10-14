@@ -362,8 +362,8 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	root.HandleFunc("GET "+p2pWSPath, p2pHub.HandleWS)
 	root.Handle("GET /p2p/", http.StripPrefix("/p2p/", http.FileServer(http.Dir(filepath.Join("web", "p2p")))))
 
-	// Management dashboard (static assets).
-	registerDashboard(root, cfg.Server.DashboardDir)
+	// Management dashboard (static assets), gated by the dashboard login.
+	root.Handle("GET /", dashboardGuard(cfg.Auth, sessions, dashboardHandler(cfg.Server.DashboardDir)))
 
 	handler := delivery.SecurityHeaders()(root)
 
@@ -509,12 +509,34 @@ func (s *Server) shutdown() {
 	s.engine.Shutdown()
 }
 
-// registerDashboard serves the management console from dir, falling back to a
+// dashboardGuard protects the dashboard pages: when authentication is enabled,
+// requests without a valid session cookie are redirected to the login page. The
+// login page itself is always served. Responses are marked no-store so a cached
+// console can never bypass the gate.
+func dashboardGuard(authCfg config.AuthConfig, sessions *auth.Store, next http.Handler) http.Handler {
+	if !authCfg.Enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.URL.Path == "/login.html" || r.URL.Path == "/login" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if c, err := r.Cookie(auth.CookieName); err == nil && sessions.Valid(c.Value) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Redirect(w, r, "/login.html", http.StatusFound)
+	})
+}
+
+// dashboardHandler serves the management console from dir, falling back to a
 // short informational page when the directory is absent.
-func registerDashboard(mux *http.ServeMux, dir string) {
+func dashboardHandler(dir string) http.Handler {
 	index := filepath.Join(dir, "index.html")
 	if _, err := os.Stat(index); err != nil {
-		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/" {
 				http.NotFound(w, r)
 				return
@@ -522,9 +544,8 @@ func registerDashboard(mux *http.ServeMux, dir string) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			fmt.Fprintln(w, "Ari Media Engine is running. Dashboard assets not found; see /healthz and /api/v1/stats.")
 		})
-		return
 	}
-	mux.Handle("GET /", http.FileServer(http.Dir(dir)))
+	return http.FileServer(http.Dir(dir))
 }
 
 // parseRTSPSource parses an RTSP source entry: "streamId=url" or a bare URL
