@@ -1,8 +1,8 @@
 // Package player implements the Ari Media Engine built-in HTML5 video player.
 // It renders a self-hosted, embeddable page at /player.html?id=STREAM_ID and
-// serves its CSS/JS assets. The page selects the best available playback
-// protocol at runtime based on the stream's delivery mode: WebRTC for
-// sub-second latency, falling back to HLS or DASH when WebRTC is blocked.
+// serves its CSS/JS assets. The page plays the stream over HLS, falling back to
+// DASH. When tokenization is enabled the page refreshes its signed token
+// automatically a few seconds before it expires.
 package player
 
 import (
@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/johndesu090/ari-media-engine/internal/broadcast"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
@@ -23,12 +24,16 @@ var assets embed.FS
 // AssetPath is the URL prefix under which player assets are served.
 const AssetPath = "/player/assets"
 
+// TokenPath is the public endpoint the player calls to refresh its token.
+const TokenPath = "/player/token"
+
+// tokenRefreshLead is how long before expiry the player refreshes its token.
+const tokenRefreshLead = 5 * time.Second
+
 // Config configures the player renderer.
 type Config struct {
 	// Title is shown in the page title and as the default UI label.
 	Title string
-	// WSPath is the signaling WebSocket path (e.g. /ws).
-	WSPath string
 	// HLSBase is the HLS output base path (e.g. /hls).
 	HLSBase string
 	// DashBase is the DASH output base path (e.g. /dash).
@@ -50,15 +55,6 @@ type Config struct {
 	Signer *delivery.TokenSigner
 	// Delivery resolves the delivery mode for a stream id.
 	Delivery func(streamID string) broadcast.Delivery
-	// ICEServers are STUN/TURN servers the browser should use.
-	ICEServers []ICEServer
-}
-
-// ICEServer is a STUN/TURN server advertised to the player.
-type ICEServer struct {
-	URLs       []string `json:"urls"`
-	Username   string   `json:"username,omitempty"`
-	Credential string   `json:"credential,omitempty"`
 }
 
 // Handler renders the player page and serves its static assets.
@@ -97,14 +93,17 @@ type viewData struct {
 
 // playerConfig is serialized into the page for the JavaScript runtime.
 type playerConfig struct {
-	StreamID   string      `json:"streamId"`
-	WSPath     string      `json:"wsPath"`
-	HLSURL     string      `json:"hlsUrl"`
-	DashURL    string      `json:"dashUrl"`
-	Delivery   string      `json:"delivery"`
-	LowLatency bool        `json:"lowLatency"`
-	P2P        p2pConfig   `json:"p2p"`
-	ICEServers []ICEServer `json:"iceServers,omitempty"`
+	StreamID       string    `json:"streamId"`
+	HLSURL         string    `json:"hlsUrl"`
+	DashURL        string    `json:"dashUrl"`
+	Delivery       string    `json:"delivery"`
+	LowLatency     bool      `json:"lowLatency"`
+	TokenEnabled   bool      `json:"tokenEnabled"`
+	Token          string    `json:"token,omitempty"`
+	TokenExpiresAt int64     `json:"tokenExpiresAt,omitempty"`
+	TokenPath      string    `json:"tokenPath,omitempty"`
+	RefreshLeadMs  int64     `json:"refreshLeadMs"`
+	P2P            p2pConfig `json:"p2p"`
 }
 
 type p2pConfig struct {
@@ -129,12 +128,12 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pc := playerConfig{
-		StreamID:   streamID,
-		WSPath:     h.cfg.WSPath,
-		Delivery:   string(mode),
-		LowLatency: h.cfg.LowLatency,
-		P2P:        p2pConfig{Enabled: h.cfg.P2PEnabled, WSPath: h.cfg.P2PWsPath},
-		ICEServers: h.cfg.ICEServers,
+		StreamID:      streamID,
+		Delivery:      string(mode),
+		LowLatency:    h.cfg.LowLatency,
+		P2P:           p2pConfig{Enabled: h.cfg.P2PEnabled, WSPath: h.cfg.P2PWsPath},
+		TokenPath:     TokenPath,
+		RefreshLeadMs: tokenRefreshLead.Milliseconds(),
 	}
 	// Build playback URLs on the public base, but fall back to same-origin
 	// relative URLs when the configured base would be mixed content (an http
@@ -144,11 +143,20 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 		publicBase = ""
 	}
 
+	var token string
+	if h.cfg.Signer != nil && h.cfg.Signer.Enabled() {
+		pc.TokenEnabled = true
+		tok, exp := h.cfg.Signer.Sign(streamID)
+		token = tok
+		pc.Token = tok
+		pc.TokenExpiresAt = exp.UnixMilli()
+	}
+
 	if mode.UsesHLS() {
-		pc.HLSURL = h.mediaURL(publicBase, h.cfg.HLSBase, streamID, "index.m3u8")
+		pc.HLSURL = h.mediaURL(publicBase, h.cfg.HLSBase, streamID, "index.m3u8", token)
 	}
 	if mode.UsesDASH() {
-		pc.DashURL = h.mediaURL(publicBase, h.cfg.DashBase, streamID, "manifest.mpd")
+		pc.DashURL = h.mediaURL(publicBase, h.cfg.DashBase, streamID, "manifest.mpd", token)
 	}
 
 	raw, err := json.Marshal(pc)
@@ -175,6 +183,50 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ServeToken mints a fresh playback token for a stream so the player can
+// refresh before its current token expires. It is a public endpoint intended to
+// sit behind the same embed/domain guard as the player page; when tokenization
+// is disabled it reports that no token is required.
+func (h *Handler) ServeToken(w http.ResponseWriter, r *http.Request) {
+	streamID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if streamID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing required query parameter: id"})
+		return
+	}
+	if h.cfg.Signer == nil || !h.cfg.Signer.Enabled() {
+		writeJSON(w, http.StatusOK, map[string]any{"tokenEnabled": false})
+		return
+	}
+
+	mode := broadcast.DeliveryAll
+	if h.cfg.Delivery != nil {
+		mode = h.cfg.Delivery(streamID)
+	}
+	if !mode.Valid() {
+		mode = broadcast.DeliveryAll
+	}
+
+	publicBase := h.cfg.PublicURL
+	if publicBase != "" && requestHTTPS(r) && strings.HasPrefix(strings.ToLower(publicBase), "http://") {
+		publicBase = ""
+	}
+
+	token, exp := h.cfg.Signer.Sign(streamID)
+	resp := map[string]any{
+		"tokenEnabled":  true,
+		"token":         token,
+		"expiresAt":     exp.UnixMilli(),
+		"refreshLeadMs": tokenRefreshLead.Milliseconds(),
+	}
+	if mode.UsesHLS() {
+		resp["hlsUrl"] = h.mediaURL(publicBase, h.cfg.HLSBase, streamID, "index.m3u8", token)
+	}
+	if mode.UsesDASH() {
+		resp["dashUrl"] = h.mediaURL(publicBase, h.cfg.DashBase, streamID, "manifest.mpd", token)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // Assets serves the embedded CSS/JS bundle under AssetPath.
 func (h *Handler) Assets() http.Handler {
 	return http.StripPrefix("/player/", http.FileServer(http.FS(assets)))
@@ -183,18 +235,23 @@ func (h *Handler) Assets() http.Handler {
 // mediaURL builds a playback URL, inserting a signed token path segment when
 // tokenization is enabled so relative segment requests keep the token. When
 // publicBase is empty a same-origin relative URL is returned.
-func (h *Handler) mediaURL(publicBase, base, streamID, file string) string {
+func (h *Handler) mediaURL(publicBase, base, streamID, file, token string) string {
 	segment := streamID
-	if h.cfg.Signer != nil && h.cfg.Signer.Enabled() {
-		if token, _ := h.cfg.Signer.Sign(streamID); token != "" {
-			segment = token + "/" + streamID
-		}
+	if token != "" {
+		segment = token + "/" + streamID
 	}
 	path := strings.Trim(strings.Join([]string{strings.Trim(base, "/"), segment, file}, "/"), "/")
 	if publicBase == "" {
 		return "/" + path
 	}
 	return strings.TrimRight(publicBase, "/") + "/" + path
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // requestHTTPS reports whether the player page was served over TLS (directly or

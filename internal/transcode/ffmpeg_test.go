@@ -23,7 +23,9 @@ func TestBuildHLSArgs(t *testing.T) {
 	for _, want := range []string{
 		"-f flv -i pipe:0",
 		"-filter_complex [0:v]split=2",
-		"-var_stream_map v:0 v:1",
+		"-var_stream_map v:0,a:0 v:1,a:1",
+		"-map 0:a:0? -c:a:0 aac",
+		"-c:a:1 aac",
 		"/tmp/hls/demo/%v/stream.m3u8",
 		"/tmp/hls/demo/%v/seg_%05d.ts",
 		"-hls_time 2",
@@ -52,11 +54,47 @@ func TestBuildDASHArgs(t *testing.T) {
 		"-f flv -i pipe:0",
 		"-f dash",
 		"-seg_duration 2",
-		"-adaptation_sets id=0,streams=v",
+		"-adaptation_sets id=0,streams=v id=1,streams=a",
 		"/tmp/hls/demo/manifest.mpd",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("DASH args missing %q\nargs: %s", want, joined)
+		}
+	}
+}
+
+func TestBuildCopyHLSArgs(t *testing.T) {
+	cfg := Config{OutputDir: "/tmp/hls", SegmentSec: 2, ListSize: 6}
+	joined := strings.Join(buildCopyHLSArgs(cfg, "demo"), " ")
+	for _, want := range []string{
+		"-f flv -i pipe:0",
+		"-c copy",
+		"-bsf:v h264_mp4toannexb",
+		"-f hls",
+		"/tmp/hls/demo/index.m3u8",
+		"/tmp/hls/demo/seg_%05d.ts",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("copy HLS args missing %q\nargs: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "libx264") {
+		t.Fatalf("copy HLS args should not re-encode: %s", joined)
+	}
+}
+
+func TestBuildCopyDASHArgs(t *testing.T) {
+	cfg := Config{OutputDir: "/tmp/hls", SegmentSec: 2}
+	joined := strings.Join(buildCopyDASHArgs(cfg, "demo"), " ")
+	for _, want := range []string{
+		"-f flv -i pipe:0",
+		"-c copy",
+		"-f dash",
+		"-adaptation_sets id=0,streams=v id=1,streams=a",
+		"/tmp/hls/demo/manifest.mpd",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("copy DASH args missing %q\nargs: %s", want, joined)
 		}
 	}
 }

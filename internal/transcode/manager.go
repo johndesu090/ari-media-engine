@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/johndesu090/ari-media-engine/internal/flv"
@@ -19,6 +20,8 @@ type Manager struct {
 	cfg Config
 	log *slog.Logger
 
+	abr atomic.Bool
+
 	mu       sync.Mutex
 	sessions map[string]*Session
 }
@@ -28,8 +31,17 @@ func New(cfg Config, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Manager{cfg: cfg.withDefaults(), log: log, sessions: map[string]*Session{}}
+	m := &Manager{cfg: cfg.withDefaults(), log: log, sessions: map[string]*Session{}}
+	m.abr.Store(cfg.Abr)
+	return m
 }
+
+// Abr reports whether the multi-rendition ladder is enabled. When false the
+// manager remuxes streams (copy) so playback follows the publisher's settings.
+func (m *Manager) Abr() bool { return m.abr.Load() }
+
+// SetAbr toggles the ABR ladder for sessions started after the call.
+func (m *Manager) SetAbr(v bool) { m.abr.Store(v) }
 
 // Start launches the FFmpeg processes for streamKey producing the requested
 // formats, and returns their shared FLV sink. A session already running for the
@@ -49,18 +61,30 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: output dir: %w", err)
 	}
-	if formats&FormatHLS != 0 {
+
+	abr := m.abr.Load()
+	if abr && formats&FormatHLS != 0 {
 		if err := writeHLSMaster(outDir, m.cfg.Renditions); err != nil {
 			return nil, fmt.Errorf("transcode: master playlist: %w", err)
 		}
 	}
 
 	var argSets [][]string
-	if formats&FormatHLS != 0 {
-		argSets = append(argSets, buildHLSArgs(m.cfg, streamKey))
-	}
-	if formats&FormatDASH != 0 {
-		argSets = append(argSets, buildDASHArgs(m.cfg, streamKey))
+	switch {
+	case abr:
+		if formats&FormatHLS != 0 {
+			argSets = append(argSets, buildHLSArgs(m.cfg, streamKey))
+		}
+		if formats&FormatDASH != 0 {
+			argSets = append(argSets, buildDASHArgs(m.cfg, streamKey))
+		}
+	default:
+		if formats&FormatHLS != 0 {
+			argSets = append(argSets, buildCopyHLSArgs(m.cfg, streamKey))
+		}
+		if formats&FormatDASH != 0 {
+			argSets = append(argSets, buildCopyDASHArgs(m.cfg, streamKey))
+		}
 	}
 
 	s := &Session{streamKey: streamKey, log: m.log.With("stream", streamKey)}

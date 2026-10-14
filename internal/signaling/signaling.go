@@ -309,19 +309,10 @@ func (s *Server) setStatus(streamID string, status broadcast.Status) {
 	b.SetStatus(status)
 }
 
-// webRTCEnabled reports whether the stream's delivery mode allows WebRTC
-// playback. Unknown streams default to enabled.
+// webRTCEnabled reports whether WebRTC playback is allowed. WebRTC playback has
+// been removed; streams are delivered over HLS/DASH only.
 func (s *Server) webRTCEnabled(streamID string) bool {
-	if s.store == nil {
-		return true
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	b, err := s.store.GetByStreamID(ctx, streamID)
-	if err != nil {
-		return true
-	}
-	return b.Delivery().UsesWebRTC()
+	return false
 }
 
 // candidateRelay returns a callback that forwards trickled ICE candidates to

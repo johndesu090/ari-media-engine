@@ -1,9 +1,10 @@
 /* Ari Media Engine — built-in HTML5 player runtime.
- * Selects a playback protocol from the stream's delivery mode:
- *   webrtc -> WebRTC only
+ * Plays the stream over HLS, falling back to DASH:
  *   hls    -> HLS only
  *   dash   -> DASH only
- *   all    -> WebRTC first, then HLS, then DASH
+ *   all    -> HLS first, then DASH
+ * When tokenization is enabled the page fetches a fresh signed token a few
+ * seconds before the current one expires and reloads the source in place.
  * Playback is forced inline (never fullscreen) on every platform. No build step. */
 (function () {
   "use strict";
@@ -24,13 +25,12 @@
   var latencyOut = document.getElementById("ari-latency-readout");
 
   var state = {
-    pc: null,
-    ws: null,
     hls: null,
     dash: null,
     mode: "none",
     lowLatency: cfg.lowLatency !== false,
     latencyTimer: null,
+    tokenTimer: null,
     triedHLS: false,
     triedDASH: false
   };
@@ -47,11 +47,6 @@
       p2p = window.AriP2P.create({ channel: cfg.streamId, wsPath: cfg.p2p.wsPath });
       p2p.start();
     } catch (e) { p2p = null; }
-  }
-
-  function signalingURL() {
-    var proto = location.protocol === "https:" ? "wss:" : "ws:";
-    return proto + "//" + location.host + (cfg.wsPath || "/ws");
   }
 
   /* --------------------------- platform support -------------------------- */
@@ -88,100 +83,10 @@
     }
   }
 
-  /* ------------------------------- WebRTC ------------------------------- */
-
-  function startWebRTC() {
-    setStatus("connecting", "Connecting · WebRTC");
-    state.mode = "webrtc";
-
-    var pc = new RTCPeerConnection({ iceServers: (cfg.iceServers && cfg.iceServers.length) ? cfg.iceServers : [] });
-    state.pc = pc;
-
-    pc.ontrack = function (ev) {
-      if (ev.streams && ev.streams[0]) {
-        video.srcObject = ev.streams[0];
-      } else {
-        if (!video.srcObject) { video.srcObject = new MediaStream(); }
-        video.srcObject.addTrack(ev.track);
-      }
-      requestPlay();
-    };
-
-    pc.onconnectionstatechange = function () {
-      switch (pc.connectionState) {
-        case "connected":
-          setStatus("live", "Live · WebRTC");
-          startLatency();
-          break;
-        case "failed":
-        case "disconnected":
-        case "closed":
-          if (state.mode === "webrtc") { nextFallback("connection lost"); }
-          break;
-      }
-    };
-
-    var ws = new WebSocket(signalingURL());
-    state.ws = ws;
-
-    pc.onicecandidate = function (ev) {
-      if (ev.candidate && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: "candidate",
-          streamId: cfg.streamId,
-          sdpMid: ev.candidate.sdpMid,
-          sdpMLineIndex: ev.candidate.sdpMLineIndex,
-          candidate: ev.candidate.candidate
-        }));
-      }
-    };
-
-    ws.onopen = function () {
-      ws.send(JSON.stringify({ type: "subscribe", streamId: cfg.streamId }));
-    };
-
-    ws.onmessage = function (ev) {
-      var msg;
-      try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.type === "offer" && msg.sdp) {
-        pc.setRemoteDescription({ type: "offer", sdp: msg.sdp })
-          .then(function () { return pc.createAnswer(); })
-          .then(function (answer) { return pc.setLocalDescription(answer); })
-          .then(function () {
-            ws.send(JSON.stringify({
-              type: "subscriber-answer",
-              streamId: cfg.streamId,
-              sdp: pc.localDescription.sdp
-            }));
-          })
-          .catch(function () { nextFallback("negotiation failed"); });
-      } else if (msg.type === "candidate" && msg.candidate) {
-        pc.addIceCandidate(new RTCIceCandidate({
-          candidate: msg.candidate,
-          sdpMid: msg.sdpMid,
-          sdpMLineIndex: msg.sdpMLineIndex
-        })).catch(function () {});
-      } else if (msg.type === "error") {
-        nextFallback(msg.error || "signaling error");
-      }
-    };
-
-    ws.onerror = function () { nextFallback("signaling unavailable"); };
-    ws.onclose = function () {
-      if (state.mode === "webrtc") { nextFallback("signaling closed"); }
-    };
-  }
-
-  function teardownWebRTC() {
-    if (state.ws) { try { state.ws.close(); } catch (e) {} state.ws = null; }
-    if (state.pc) { try { state.pc.close(); } catch (e) {} state.pc = null; }
-  }
-
   /* ---------------------------- HLS / DASH ------------------------------ */
 
   // nextFallback walks the delivery chain: HLS, then DASH, then error.
   function nextFallback(reason) {
-    teardownWebRTC();
     stopLatency();
     if (!state.triedHLS && cfg.hlsUrl) { state.triedHLS = true; startHLS(); return; }
     if (!state.triedDASH && cfg.dashUrl) { state.triedDASH = true; startDASH(); return; }
@@ -246,6 +151,50 @@
       return;
     }
     setStatus("error", "DASH playback requires dash.js (set player.dash_js_url)");
+  }
+
+  /* --------------------------- token refresh ---------------------------- */
+
+  // reloadSource restarts the active source with the (possibly new) URL while
+  // keeping the same player instance.
+  function reloadSource() {
+    if (state.mode === "hls") {
+      if (state.hls) {
+        try { state.hls.stopLoad(); state.hls.loadSource(cfg.hlsUrl); state.hls.startLoad(); } catch (e) { /* ignore */ }
+      } else if (cfg.hlsUrl) {
+        video.src = cfg.hlsUrl;
+        requestPlay();
+      }
+    } else if (state.mode === "dash" && state.dash) {
+      try { state.dash.attachSource(cfg.dashUrl); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function scheduleTokenRefresh() {
+    if (!cfg.tokenEnabled || !cfg.tokenExpiresAt) { return; }
+    if (state.tokenTimer) { clearTimeout(state.tokenTimer); state.tokenTimer = null; }
+    var lead = cfg.refreshLeadMs || 5000;
+    var ms = cfg.tokenExpiresAt - Date.now() - lead;
+    if (ms < 0) { ms = 0; }
+    state.tokenTimer = setTimeout(refreshToken, ms);
+  }
+
+  function refreshToken() {
+    var base = cfg.tokenPath || "/player/token";
+    var url = base + "?id=" + encodeURIComponent(cfg.streamId);
+    fetch(url, { credentials: "omit", cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (d && d.tokenEnabled) {
+          if (d.hlsUrl) { cfg.hlsUrl = d.hlsUrl; }
+          if (d.dashUrl) { cfg.dashUrl = d.dashUrl; }
+          if (d.expiresAt) { cfg.tokenExpiresAt = d.expiresAt; }
+          if (d.refreshLeadMs) { cfg.refreshLeadMs = d.refreshLeadMs; }
+          reloadSource();
+        }
+      })
+      .catch(function () { /* ignore; retry on next schedule */ })
+      .then(scheduleTokenRefresh);
   }
 
   /* ------------------------------ latency ------------------------------- */
@@ -326,18 +275,17 @@
   }
 
   switch (cfg.delivery) {
-    case "hls":
-      state.triedHLS = true;
-      startHLS();
-      break;
     case "dash":
       state.triedDASH = true;
       startDASH();
       break;
-    case "webrtc":
-      if (window.RTCPeerConnection) { startWebRTC(); } else { setStatus("error", "WebRTC is not supported by this browser"); }
+    case "hls":
+      state.triedHLS = true;
+      startHLS();
       break;
-    default: // "all"
-      if (window.RTCPeerConnection) { startWebRTC(); } else { nextFallback("WebRTC unsupported"); }
+    default: // "all" (or any legacy value) -> HLS first, then DASH
+      startHLS();
   }
+
+  scheduleTokenRefresh();
 })();

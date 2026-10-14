@@ -41,10 +41,8 @@ const (
 type Delivery string
 
 const (
-	// DeliveryAll exposes WebRTC, HLS and DASH.
+	// DeliveryAll exposes HLS and DASH.
 	DeliveryAll Delivery = "all"
-	// DeliveryWebRTC exposes WebRTC only.
-	DeliveryWebRTC Delivery = "webrtc"
 	// DeliveryHLS exposes HLS only.
 	DeliveryHLS Delivery = "hls"
 	// DeliveryDASH exposes DASH only.
@@ -54,15 +52,12 @@ const (
 // Valid reports whether the delivery mode is recognised.
 func (d Delivery) Valid() bool {
 	switch d {
-	case DeliveryAll, DeliveryWebRTC, DeliveryHLS, DeliveryDASH:
+	case DeliveryAll, DeliveryHLS, DeliveryDASH:
 		return true
 	default:
 		return false
 	}
 }
-
-// UsesWebRTC reports whether the mode includes WebRTC playback.
-func (d Delivery) UsesWebRTC() bool { return d == DeliveryAll || d == DeliveryWebRTC }
 
 // UsesHLS reports whether the mode includes HLS playback.
 func (d Delivery) UsesHLS() bool { return d == DeliveryAll || d == DeliveryHLS }

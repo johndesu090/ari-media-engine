@@ -26,6 +26,9 @@ type Config struct {
 	ListSize int
 	// Preset is the x264 preset.
 	Preset string
+	// Abr enables the multi-rendition ladder. When false the stream is remuxed
+	// with -c copy so playback follows the publisher's encoder settings.
+	Abr bool
 	// Renditions is the ABR ladder, highest quality first.
 	Renditions []Rendition
 }

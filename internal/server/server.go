@@ -127,7 +127,6 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 
 	playerHandler, err := player.New(player.Config{
 		Title:      cfg.Player.Title,
-		WSPath:     cfg.Player.WSPath,
 		HLSBase:    cfg.Player.HLSBase,
 		DashBase:   cfg.Player.DashBase,
 		PublicURL:  cfg.Server.PublicURL,
@@ -138,7 +137,6 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		P2PWsPath:  cfg.P2P.WSPath,
 		Signer:     signer,
 		Delivery:   deliveryOf,
-		ICEServers: toPlayerICEServers(cfg.WebRTC.ICEServers),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server: player: %w", err)
@@ -169,6 +167,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 			SegmentSec: cfg.Transcode.SegmentSec,
 			ListSize:   cfg.Transcode.ListSize,
 			Preset:     cfg.Transcode.Preset,
+			Abr:        cfg.Transcode.Abr,
 			Renditions: toRenditions(cfg.Transcode.Renditions),
 		}, log)
 	}
@@ -314,6 +313,16 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		Sessions:   sessions,
 		StartedAt:  time.Now().UTC(),
 		Transcodes: transcodes,
+		TranscodeAbr: func() bool {
+			return transcoder != nil && transcoder.Abr()
+		},
+		SetTranscodeAbr: func(v bool) error {
+			if transcoder == nil {
+				return fmt.Errorf("transcoding is not configured")
+			}
+			transcoder.SetAbr(v)
+			return nil
+		},
 		Recordings: objectStore,
 		RecordActive: func() int {
 			return recordings()
@@ -338,6 +347,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		Enforce:  cfg.Security.EnforceOrigin,
 	}
 	root.Handle("GET /player.html", guard.Middleware(http.HandlerFunc(playerHandler.ServePlayer)))
+	root.Handle("GET "+player.TokenPath, guard.Middleware(http.HandlerFunc(playerHandler.ServeToken)))
 	root.Handle("GET "+player.AssetPath+"/", playerHandler.Assets())
 
 	// HLS/DASH output, served from disk with optional token enforcement.
@@ -570,15 +580,6 @@ func toICEServers(in []config.ICEServerConfig) []pion.ICEServer {
 	out := make([]pion.ICEServer, 0, len(in))
 	for _, s := range in {
 		out = append(out, pion.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
-	}
-	return out
-}
-
-// toPlayerICEServers converts configuration ICE servers for the browser player.
-func toPlayerICEServers(in []config.ICEServerConfig) []player.ICEServer {
-	out := make([]player.ICEServer, 0, len(in))
-	for _, s := range in {
-		out = append(out, player.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
 	}
 	return out
 }

@@ -152,7 +152,7 @@
     }
 
     function deliverySelect(id, mode) {
-      const opts = ["all", "webrtc", "hls", "dash"];
+      const opts = ["all", "hls", "dash"];
       let html = '<select data-delivery="' + escapeHtml(id) + '" style="flex:0; min-width:96px">';
       for (const o of opts) {
         html += '<option value="' + o + '"' + (o === mode ? " selected" : "") + '>' + o + '</option>';
@@ -260,7 +260,23 @@
       } catch (e) { toast("p2p: " + e.message); }
     }
 
-    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadRecordings(); loadDomains(); loadTokenConfig(); loadP2P(); }
+    async function loadTranscode() {
+      try {
+        const t = await api("/api/v1/transcode");
+        $("abr-enabled").checked = !!t.abr;
+        $("abr-active").textContent = t.active || 0;
+      } catch (e) { toast("transcode: " + e.message); }
+    }
+
+    async function saveTranscode() {
+      try {
+        await api("/api/v1/transcode", { method: "PUT", body: JSON.stringify({ abr: $("abr-enabled").checked }) });
+        toast("Transcoding settings saved");
+        loadTranscode();
+      } catch (e) { toast("transcode: " + e.message); }
+    }
+
+    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadRecordings(); loadDomains(); loadTokenConfig(); loadP2P(); loadTranscode(); }
 
     // Wire controls via addEventListener (inline handlers are blocked by the CSP).
     function wireControls() {
@@ -273,6 +289,8 @@
       on("reset-token-btn", loadTokenConfig);
       on("save-p2p-btn", saveP2P);
       on("reset-p2p-btn", loadP2P);
+      on("save-abr-btn", saveTranscode);
+      on("reset-abr-btn", loadTranscode);
     }
     wireControls();
 

@@ -114,9 +114,12 @@ webhooks:
   urls: []
   secret: ""
 
-# FFmpeg-based adaptive bitrate ladder. When enabled, each ingested stream is
-# transcoded into multiple HLS renditions under <output_dir>/<streamID>/ and
-# served at /hls/<streamID>/index.m3u8.
+# FFmpeg packaging of ingested streams into HLS/DASH. When enabled, each
+# ingested stream is packaged under <output_dir>/<streamID>/ and served at
+# /hls/<streamID>/index.m3u8 and /dash/<streamID>/manifest.mpd. By default the
+# stream is remuxed (copied, no re-encode) so playback follows the publisher's
+# OBS/encoder settings exactly. Set abr: true (or toggle it in the dashboard) to
+# re-encode into the rendition ladder below instead.
 transcode:
   enabled: false
   ffmpeg_path: ffmpeg
@@ -124,6 +127,7 @@ transcode:
   segment_sec: 2
   list_size: 6
   preset: veryfast
+  abr: false
   renditions:
     - name: 1080p
       width: 1920

@@ -31,8 +31,8 @@ func filterGraph(renditions []Rendition) string {
 	return fb.String()
 }
 
-// encodeArgs returns the per-rendition map/encode options shared by all formats.
-func encodeArgs(cfg Config) []string {
+// videoEncodeArgs returns the per-rendition video map/encode options.
+func videoEncodeArgs(cfg Config) []string {
 	var args []string
 	for i, r := range cfg.Renditions {
 		args = append(args,
@@ -57,19 +57,41 @@ func encodeArgs(cfg Config) []string {
 	)
 }
 
+// hlsAudioArgs maps and encodes one AAC stream per rendition. FFmpeg's HLS
+// muxer rejects the same elementary stream appearing in two variants, so each
+// variant gets its own audio encode.
+func hlsAudioArgs(cfg Config) []string {
+	var args []string
+	for i := range cfg.Renditions {
+		args = append(args,
+			"-map", "0:a:0?",
+			fmt.Sprintf("-c:a:%d", i), "aac",
+			fmt.Sprintf("-b:a:%d", i), "128k",
+			fmt.Sprintf("-ac:a:%d", i), "2",
+		)
+	}
+	return args
+}
+
+// dashAudioArgs maps a single AAC audio stream shared by the MPD.
+func dashAudioArgs() []string {
+	return []string{"-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k", "-ac", "2"}
+}
+
 // buildHLSArgs builds the FFmpeg arguments for the HLS ladder.
 func buildHLSArgs(cfg Config, streamKey string) []string {
 	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
 
 	var streamMap []string
 	for i := range cfg.Renditions {
-		streamMap = append(streamMap, fmt.Sprintf("v:%d", i))
+		streamMap = append(streamMap, fmt.Sprintf("v:%d,a:%d", i, i))
 	}
 
 	args := []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
 		"-f", "flv", "-i", "pipe:0",
 		"-filter_complex", filterGraph(cfg.Renditions)}
-	args = append(args, encodeArgs(cfg)...)
+	args = append(args, videoEncodeArgs(cfg)...)
+	args = append(args, hlsAudioArgs(cfg)...)
 	args = append(args,
 		"-f", "hls",
 		"-hls_time", strconv.Itoa(cfg.SegmentSec),
@@ -81,6 +103,24 @@ func buildHLSArgs(cfg Config, streamKey string) []string {
 		outDir+"/%v/stream.m3u8",
 	)
 	return args
+}
+
+// buildCopyHLSArgs remuxes the ingested stream into a single HLS media playlist
+// with no re-encoding, so playback follows the publisher's settings exactly.
+func buildCopyHLSArgs(cfg Config, streamKey string) []string {
+	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
+	return []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
+		"-f", "flv", "-i", "pipe:0",
+		"-c", "copy",
+		"-bsf:v", "h264_mp4toannexb",
+		"-f", "hls",
+		"-hls_time", strconv.Itoa(cfg.SegmentSec),
+		"-hls_list_size", strconv.Itoa(cfg.ListSize),
+		"-hls_flags", "delete_segments+independent_segments",
+		"-hls_segment_type", "mpegts",
+		"-hls_segment_filename", outDir + "/seg_%05d.ts",
+		outDir + "/index.m3u8",
+	}
 }
 
 // writeHLSMaster writes the multi-variant master playlist. FFmpeg only writes
@@ -127,16 +167,35 @@ func buildDASHArgs(cfg Config, streamKey string) []string {
 	args := []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
 		"-f", "flv", "-i", "pipe:0",
 		"-filter_complex", filterGraph(cfg.Renditions)}
-	args = append(args, encodeArgs(cfg)...)
+	args = append(args, videoEncodeArgs(cfg)...)
+	args = append(args, dashAudioArgs()...)
 	args = append(args,
 		"-f", "dash",
 		"-seg_duration", strconv.Itoa(cfg.SegmentSec),
 		"-use_template", "1",
 		"-use_timeline", "1",
-		"-adaptation_sets", "id=0,streams=v",
+		"-adaptation_sets", "id=0,streams=v id=1,streams=a",
 		"-init_seg_name", "init-$RepresentationID$.m4s",
 		"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
 		outDir+"/manifest.mpd",
 	)
 	return args
+}
+
+// buildCopyDASHArgs remuxes the ingested stream into a DASH MPD with no
+// re-encoding, so playback follows the publisher's settings exactly.
+func buildCopyDASHArgs(cfg Config, streamKey string) []string {
+	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
+	return []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
+		"-f", "flv", "-i", "pipe:0",
+		"-c", "copy",
+		"-f", "dash",
+		"-seg_duration", strconv.Itoa(cfg.SegmentSec),
+		"-use_template", "1",
+		"-use_timeline", "1",
+		"-adaptation_sets", "id=0,streams=v id=1,streams=a",
+		"-init_seg_name", "init-$RepresentationID$.m4s",
+		"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
+		outDir + "/manifest.mpd",
+	}
 }

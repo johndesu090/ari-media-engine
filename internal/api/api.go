@@ -27,44 +27,48 @@ import (
 
 // Options configures the API server.
 type Options struct {
-	Store        broadcast.Store
-	Engine       *webrtc.Engine
-	Policy       *delivery.DomainPolicy
-	Signer       *delivery.TokenSigner
-	Logger       *slog.Logger
-	Webhooks     *webhook.Dispatcher
-	Auth         config.AuthConfig
-	Sessions     *auth.Store
-	StartedAt    time.Time
-	Transcodes   func() int
-	HLSBase      string
-	DashBase     string
-	Cluster      *cluster.Manager
-	Recordings   storage.Store
-	RecordActive func() int
-	P2P          *p2p.Hub
-	RTSP         *rtsp.Manager
+	Store           broadcast.Store
+	Engine          *webrtc.Engine
+	Policy          *delivery.DomainPolicy
+	Signer          *delivery.TokenSigner
+	Logger          *slog.Logger
+	Webhooks        *webhook.Dispatcher
+	Auth            config.AuthConfig
+	Sessions        *auth.Store
+	StartedAt       time.Time
+	Transcodes      func() int
+	TranscodeAbr    func() bool
+	SetTranscodeAbr func(bool) error
+	HLSBase         string
+	DashBase        string
+	Cluster         *cluster.Manager
+	Recordings      storage.Store
+	RecordActive    func() int
+	P2P             *p2p.Hub
+	RTSP            *rtsp.Manager
 }
 
 // Server exposes the REST API.
 type Server struct {
-	store        broadcast.Store
-	engine       *webrtc.Engine
-	policy       *delivery.DomainPolicy
-	signer       *delivery.TokenSigner
-	log          *slog.Logger
-	webhooks     *webhook.Dispatcher
-	auth         config.AuthConfig
-	sessions     *auth.Store
-	startedAt    time.Time
-	transcodes   func() int
-	hlsBase      string
-	dashBase     string
-	cluster      *cluster.Manager
-	recordings   storage.Store
-	recordActive func() int
-	p2p          *p2p.Hub
-	rtsp         *rtsp.Manager
+	store           broadcast.Store
+	engine          *webrtc.Engine
+	policy          *delivery.DomainPolicy
+	signer          *delivery.TokenSigner
+	log             *slog.Logger
+	webhooks        *webhook.Dispatcher
+	auth            config.AuthConfig
+	sessions        *auth.Store
+	startedAt       time.Time
+	transcodes      func() int
+	transcodeAbr    func() bool
+	setTranscodeAbr func(bool) error
+	hlsBase         string
+	dashBase        string
+	cluster         *cluster.Manager
+	recordings      storage.Store
+	recordActive    func() int
+	p2p             *p2p.Hub
+	rtsp            *rtsp.Manager
 }
 
 // New constructs the API server.
@@ -78,23 +82,25 @@ func New(opts Options) *Server {
 		startedAt = time.Now().UTC()
 	}
 	return &Server{
-		store:        opts.Store,
-		engine:       opts.Engine,
-		policy:       opts.Policy,
-		signer:       opts.Signer,
-		log:          log,
-		webhooks:     opts.Webhooks,
-		auth:         opts.Auth,
-		sessions:     opts.Sessions,
-		startedAt:    startedAt,
-		transcodes:   opts.Transcodes,
-		hlsBase:      opts.HLSBase,
-		dashBase:     opts.DashBase,
-		cluster:      opts.Cluster,
-		recordings:   opts.Recordings,
-		recordActive: opts.RecordActive,
-		p2p:          opts.P2P,
-		rtsp:         opts.RTSP,
+		store:           opts.Store,
+		engine:          opts.Engine,
+		policy:          opts.Policy,
+		signer:          opts.Signer,
+		log:             log,
+		webhooks:        opts.Webhooks,
+		auth:            opts.Auth,
+		sessions:        opts.Sessions,
+		startedAt:       startedAt,
+		transcodes:      opts.Transcodes,
+		transcodeAbr:    opts.TranscodeAbr,
+		setTranscodeAbr: opts.SetTranscodeAbr,
+		hlsBase:         opts.HLSBase,
+		dashBase:        opts.DashBase,
+		cluster:         opts.Cluster,
+		recordings:      opts.Recordings,
+		recordActive:    opts.RecordActive,
+		p2p:             opts.P2P,
+		rtsp:            opts.RTSP,
 	}
 }
 
@@ -121,6 +127,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/recordings/{key...}", protect(s.handleDeleteRecording))
 	mux.Handle("GET /api/v1/p2p", protect(s.handleGetP2P))
 	mux.Handle("PUT /api/v1/p2p", protect(s.handlePutP2P))
+	mux.Handle("GET /api/v1/transcode", protect(s.handleGetTranscode))
+	mux.Handle("PUT /api/v1/transcode", protect(s.handlePutTranscode))
 	mux.Handle("GET /api/v1/rtsp/pull", protect(s.handleListRTSP))
 	mux.Handle("POST /api/v1/rtsp/pull", protect(s.handleStartRTSP))
 	mux.Handle("DELETE /api/v1/rtsp/pull/{streamId}", protect(s.handleStopRTSP))
@@ -396,6 +404,48 @@ func (s *Server) handlePutP2P(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetTranscode reports the packaging pipeline state and whether the
+// optional ABR ladder is enabled.
+func (s *Server) handleGetTranscode(w http.ResponseWriter, _ *http.Request) {
+	enabled := s.transcodes != nil
+	abr := false
+	if s.transcodeAbr != nil {
+		abr = s.transcodeAbr()
+	}
+	active := 0
+	if s.transcodes != nil {
+		active = s.transcodes()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled, "abr": abr, "active": active})
+}
+
+// handlePutTranscode toggles the optional ABR ladder. When disabled streams are
+// remuxed (copied) so playback follows the publisher's settings.
+func (s *Server) handlePutTranscode(w http.ResponseWriter, r *http.Request) {
+	if s.setTranscodeAbr == nil {
+		writeError(w, http.StatusServiceUnavailable, "transcode_unavailable", "transcoding is not configured")
+		return
+	}
+	var req struct {
+		Abr *bool `json:"abr"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if req.Abr != nil {
+		if err := s.setTranscodeAbr(*req.Abr); err != nil {
+			writeError(w, http.StatusServiceUnavailable, "transcode_unavailable", err.Error())
+			return
+		}
+	}
+	abr := false
+	if s.transcodeAbr != nil {
+		abr = s.transcodeAbr()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "abr": abr})
+}
+
 // handleListRecordings lists stored recordings.
 func (s *Server) handleListRecordings(w http.ResponseWriter, _ *http.Request) {
 	if s.recordings == nil {
@@ -552,7 +602,7 @@ func (s *Server) handleStreamStats(w http.ResponseWriter, r *http.Request) {
 		"stream":       s.snapshot(b),
 		"viewerCount":  s.engine.ViewerCount(b.StreamID()),
 		"engineLive":   s.engine.HasLiveStream(b.StreamID()),
-		"protocol":     "webrtc",
+		"delivery":     string(b.Delivery()),
 		"embedDomains": s.policy.Effective(b.StreamID()),
 	})
 }

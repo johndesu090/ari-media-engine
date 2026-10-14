@@ -190,15 +190,19 @@ type WebhookConfig struct {
 	Secret  string   `yaml:"secret"`
 }
 
-// TranscodeConfig controls the FFmpeg ABR ladder that produces HLS renditions
-// for each ingested stream.
+// TranscodeConfig controls the FFmpeg packaging of ingested streams into
+// HLS/DASH. By default streams are remuxed (copied) so playback follows the
+// publisher's settings; the ABR ladder is optional.
 type TranscodeConfig struct {
-	Enabled    bool              `yaml:"enabled"`
-	FFmpegPath string            `yaml:"ffmpeg_path"`
-	OutputDir  string            `yaml:"output_dir"`
-	SegmentSec int               `yaml:"segment_sec"`
-	ListSize   int               `yaml:"list_size"`
-	Preset     string            `yaml:"preset"`
+	Enabled    bool   `yaml:"enabled"`
+	FFmpegPath string `yaml:"ffmpeg_path"`
+	OutputDir  string `yaml:"output_dir"`
+	SegmentSec int    `yaml:"segment_sec"`
+	ListSize   int    `yaml:"list_size"`
+	Preset     string `yaml:"preset"`
+	// Abr enables the multi-rendition ladder. When false (default) the stream is
+	// remuxed with -c copy, following the publisher's OBS/encoder settings.
+	Abr        bool              `yaml:"abr"`
 	Renditions []RenditionConfig `yaml:"renditions"`
 }
 
@@ -279,6 +283,7 @@ func Default() Config {
 			SegmentSec: 2,
 			ListSize:   6,
 			Preset:     "veryfast",
+			Abr:        false,
 			Renditions: []RenditionConfig{
 				{Name: "1080p", Width: 1920, Height: 1080, Bitrate: "5000k", MaxRate: "5350k", BufSize: "7500k"},
 				{Name: "720p", Width: 1280, Height: 720, Bitrate: "2800k", MaxRate: "2996k", BufSize: "4200k"},
@@ -365,6 +370,7 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Transcode.FFmpegPath, "ARI_TRANSCODE_FFMPEG_PATH")
 	setString(&cfg.Transcode.OutputDir, "ARI_TRANSCODE_OUTPUT_DIR")
 	setInt(&cfg.Transcode.SegmentSec, "ARI_TRANSCODE_SEGMENT_SEC")
+	setBool(&cfg.Transcode.Abr, "ARI_TRANSCODE_ABR")
 	setBool(&cfg.Token.Enabled, "ARI_TOKEN_ENABLED")
 	setString(&cfg.Token.Secret, "ARI_TOKEN_SECRET")
 	setInt(&cfg.Token.TTL, "ARI_TOKEN_TTL_SEC")

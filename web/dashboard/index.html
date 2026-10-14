@@ -70,14 +70,12 @@
           <input id="c-id" placeholder="stream id (optional)" autocomplete="off">
           <input id="c-name" placeholder="display name (optional)" autocomplete="off">
           <select id="c-type">
-            <option value="webrtc">WebRTC</option>
             <option value="rtmp">RTMP</option>
             <option value="srt">SRT</option>
             <option value="rtsp">RTSP</option>
           </select>
           <select id="c-delivery">
-            <option value="all">Delivery: all</option>
-            <option value="webrtc">Delivery: WebRTC only</option>
+            <option value="all">Delivery: HLS + DASH</option>
             <option value="hls">Delivery: HLS only</option>
             <option value="dash">Delivery: DASH only</option>
           </select>
@@ -132,6 +130,20 @@
         </div>
         <p class="muted" style="margin-top:.7rem;">Tokens are HMAC-signed and embedded in the URL path
           (<code>/hls/&lt;token&gt;/&lt;streamId&gt;/…</code>) so playlists and segments stay authorized.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Transcoding</h2>
+        <label class="muted" style="display:flex; align-items:center; gap:.5rem; margin-bottom:.6rem;">
+          <input type="checkbox" id="abr-enabled" style="flex:0"> Enable ABR ladder (1080p / 720p / 480p)
+        </label>
+        <div style="display:flex; gap:.5rem;">
+          <button id="save-abr-btn">Save</button>
+          <button class="ghost" id="reset-abr-btn">Reset</button>
+        </div>
+        <p class="muted" style="margin-top:.7rem;">When off, streams are remuxed with no re-encoding so
+          playback follows your OBS/encoder settings exactly (lowest CPU). Changes apply to new publishes.
+          Active sessions: <span id="abr-active">0</span>.</p>
       </div>
 
       <div class="panel">
