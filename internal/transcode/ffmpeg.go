@@ -79,7 +79,7 @@ func dashAudioArgs() []string {
 }
 
 // buildHLSArgs builds the FFmpeg arguments for the HLS ladder.
-func buildHLSArgs(cfg Config, streamKey string) []string {
+func buildHLSArgs(cfg Config, streamKey, tag string) []string {
 	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
 
 	var streamMap []string
@@ -98,7 +98,7 @@ func buildHLSArgs(cfg Config, streamKey string) []string {
 		"-hls_list_size", strconv.Itoa(cfg.ListSize),
 		"-hls_flags", "delete_segments+independent_segments",
 		"-hls_segment_type", "mpegts",
-		"-hls_segment_filename", outDir+"/%v/seg_%05d.ts",
+		"-hls_segment_filename", outDir+"/%v/seg_"+tag+"_%05d.ts",
 		"-var_stream_map", strings.Join(streamMap, " "),
 		outDir+"/%v/stream.m3u8",
 	)
@@ -107,7 +107,7 @@ func buildHLSArgs(cfg Config, streamKey string) []string {
 
 // buildCopyHLSArgs remuxes the ingested stream into a single HLS media playlist
 // with no re-encoding, so playback follows the publisher's settings exactly.
-func buildCopyHLSArgs(cfg Config, streamKey string) []string {
+func buildCopyHLSArgs(cfg Config, streamKey, tag string) []string {
 	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
 	return []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
 		"-f", "flv", "-i", "pipe:0",
@@ -118,7 +118,7 @@ func buildCopyHLSArgs(cfg Config, streamKey string) []string {
 		"-hls_list_size", strconv.Itoa(cfg.ListSize),
 		"-hls_flags", "delete_segments+independent_segments",
 		"-hls_segment_type", "mpegts",
-		"-hls_segment_filename", outDir + "/seg_%05d.ts",
+		"-hls_segment_filename", outDir + "/seg_" + tag + "_%05d.ts",
 		outDir + "/index.m3u8",
 	}
 }
@@ -161,7 +161,7 @@ func parseBitrate(s string) int {
 }
 
 // buildDASHArgs builds the FFmpeg arguments for the DASH MPD.
-func buildDASHArgs(cfg Config, streamKey string) []string {
+func buildDASHArgs(cfg Config, streamKey, tag string) []string {
 	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
 
 	args := []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
@@ -175,8 +175,8 @@ func buildDASHArgs(cfg Config, streamKey string) []string {
 		"-use_template", "1",
 		"-use_timeline", "1",
 		"-adaptation_sets", "id=0,streams=v id=1,streams=a",
-		"-init_seg_name", "init-$RepresentationID$.m4s",
-		"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
+		"-init_seg_name", "init-"+tag+"-$RepresentationID$.m4s",
+		"-media_seg_name", "chunk-"+tag+"-$RepresentationID$-$Number%05d$.m4s",
 		outDir+"/manifest.mpd",
 	)
 	return args
@@ -184,7 +184,7 @@ func buildDASHArgs(cfg Config, streamKey string) []string {
 
 // buildCopyDASHArgs remuxes the ingested stream into a DASH MPD with no
 // re-encoding, so playback follows the publisher's settings exactly.
-func buildCopyDASHArgs(cfg Config, streamKey string) []string {
+func buildCopyDASHArgs(cfg Config, streamKey, tag string) []string {
 	outDir := filepath.ToSlash(filepath.Join(cfg.OutputDir, streamKey))
 	return []string{"-hide_banner", "-loglevel", "warning", "-probesize", "500000", "-analyzeduration", "1000000",
 		"-f", "flv", "-i", "pipe:0",
@@ -194,8 +194,8 @@ func buildCopyDASHArgs(cfg Config, streamKey string) []string {
 		"-use_template", "1",
 		"-use_timeline", "1",
 		"-adaptation_sets", "id=0,streams=v id=1,streams=a",
-		"-init_seg_name", "init-$RepresentationID$.m4s",
-		"-media_seg_name", "chunk-$RepresentationID$-$Number%05d$.m4s",
+		"-init_seg_name", "init-" + tag + "-$RepresentationID$.m4s",
+		"-media_seg_name", "chunk-" + tag + "-$RepresentationID$-$Number%05d$.m4s",
 		outDir + "/manifest.mpd",
 	}
 }

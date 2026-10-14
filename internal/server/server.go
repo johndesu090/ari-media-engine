@@ -429,6 +429,9 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 					if rec != nil {
 						rec.Stop(streamKey)
 					}
+					if transcoder != nil {
+						transcoder.Stop(streamKey)
+					}
 				},
 			},
 			NewFLVSink:   newFLVSink,

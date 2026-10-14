@@ -92,10 +92,18 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 	}
 
 	outDir := filepath.Join(m.cfg.OutputDir, streamKey)
+	// Clear segments/playlist left by a previous session so a restart never
+	// serves stale media and disk usage does not grow across restarts.
+	if err := os.RemoveAll(outDir); err != nil {
+		return nil, fmt.Errorf("transcode: clear output dir: %w", err)
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: output dir: %w", err)
 	}
 
+	// A per-session tag keeps segment filenames unique across restarts so
+	// browsers and CDNs never serve a stale segment under a reused name.
+	tag := time.Now().UTC().Format("20060102T150405")
 	cfg := m.currentConfig()
 	abr := m.abr.Load()
 	if abr && formats&FormatHLS != 0 {
@@ -108,17 +116,17 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 	switch {
 	case abr:
 		if formats&FormatHLS != 0 {
-			argSets = append(argSets, buildHLSArgs(cfg, streamKey))
+			argSets = append(argSets, buildHLSArgs(cfg, streamKey, tag))
 		}
 		if formats&FormatDASH != 0 {
-			argSets = append(argSets, buildDASHArgs(cfg, streamKey))
+			argSets = append(argSets, buildDASHArgs(cfg, streamKey, tag))
 		}
 	default:
 		if formats&FormatHLS != 0 {
-			argSets = append(argSets, buildCopyHLSArgs(cfg, streamKey))
+			argSets = append(argSets, buildCopyHLSArgs(cfg, streamKey, tag))
 		}
 		if formats&FormatDASH != 0 {
-			argSets = append(argSets, buildCopyDASHArgs(cfg, streamKey))
+			argSets = append(argSets, buildCopyDASHArgs(cfg, streamKey, tag))
 		}
 	}
 
