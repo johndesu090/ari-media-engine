@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.40.0
+	github.com/datarhei/gosrt v0.12.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/pion/ice/v4 v4.4.7
@@ -15,6 +16,7 @@ require (
 )
 
 require (
+	github.com/benburkert/openpgp v0.0.0-20160410205803-c2471f86866c // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

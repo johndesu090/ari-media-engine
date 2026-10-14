@@ -25,6 +25,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/ingest"
 	"github.com/johndesu090/ari-media-engine/internal/ingest/rtmp"
 	"github.com/johndesu090/ari-media-engine/internal/ingest/rtsp"
+	"github.com/johndesu090/ari-media-engine/internal/ingest/srt"
 	"github.com/johndesu090/ari-media-engine/internal/p2p"
 	"github.com/johndesu090/ari-media-engine/internal/player"
 	"github.com/johndesu090/ari-media-engine/internal/recorder"
@@ -53,6 +54,7 @@ type Server struct {
 	objectStore storage.Store
 	audio       *audio.Manager
 	rtsp        *rtsp.Manager
+	srt         *srt.Manager
 
 	http *http.Server
 }
@@ -285,6 +287,15 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		OnUnpublish: func(id string) { upsertStream(store, id, broadcast.StatusEnded) },
 	})
 
+	// SRT ingest listener (optional).
+	var srtMgr *srt.Manager
+	if cfg.Ingest.SRT.Enabled {
+		srtMgr = srt.NewManager(engine, fmt.Sprintf(":%d", cfg.Ingest.SRT.Port), log, srt.Hooks{
+			OnPublish:   func(id string) { upsertStream(store, id, broadcast.StatusLive) },
+			OnUnpublish: func(id string) { upsertStream(store, id, broadcast.StatusEnded) },
+		})
+	}
+
 	apiSrv := api.New(api.Options{
 		Store:      store,
 		Engine:     engine,
@@ -366,6 +377,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		objectStore: objectStore,
 		audio:       audioMgr,
 		rtsp:        rtspMgr,
+		srt:         srtMgr,
 		rtmpHandler: ingest.NewRTMPHandler(ingest.RTMPOptions{
 			Engine: engine,
 			Logger: log,
@@ -406,6 +418,11 @@ func (s *Server) Run(ctx context.Context) error {
 			return err
 		}
 	}
+	if s.srt != nil {
+		if err := s.srt.Start(); err != nil {
+			s.log.Warn("srt listener failed to start", "err", err)
+		}
+	}
 	for _, src := range s.cfg.Ingest.RTSP.Sources {
 		streamID, rawURL := parseRTSPSource(src)
 		if streamID == "" {
@@ -444,9 +461,6 @@ func (s *Server) startIngest(ctx context.Context) error {
 	if s.cfg.Ingest.RTMP.Enabled {
 		specs = append(specs, ingest.Listener{Protocol: ingest.ProtocolRTMP, Addr: fmt.Sprintf(":%d", s.cfg.Ingest.RTMP.Port), Handler: s.rtmpHandler})
 	}
-	if s.cfg.Ingest.SRT.Enabled {
-		specs = append(specs, ingest.Listener{Protocol: ingest.ProtocolSRT, Addr: fmt.Sprintf(":%d", s.cfg.Ingest.SRT.Port)})
-	}
 	if s.cfg.Ingest.RTSP.Enabled {
 		specs = append(specs, ingest.Listener{Protocol: ingest.ProtocolRTSP, Addr: fmt.Sprintf(":%d", s.cfg.Ingest.RTSP.Port)})
 	}
@@ -477,6 +491,9 @@ func (s *Server) shutdown() {
 	}
 	if s.rtsp != nil {
 		s.rtsp.StopAll()
+	}
+	if s.srt != nil {
+		s.srt.Stop()
 	}
 	if s.objectStore != nil {
 		_ = s.objectStore.Close()

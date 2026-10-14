@@ -49,6 +49,7 @@ ingest:
   srt:
     enabled: true
     port: 8890
+    # Publishers connect with srt://host:8890?streamid=STREAM_ID (MPEG-TS).
   rtsp:
     enabled: false
     port: 8554

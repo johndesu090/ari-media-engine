@@ -6,7 +6,7 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery over trickle ICE.
 - **Simulcast:** accepts a publisher's RID layers and forwards the preferred layer to subscribers.
 - **Peer-assisted delivery (P2P):** HLS/DASH viewers share segments over WebRTC data channels, with CDN fallback.
-- **Multi-protocol ingest:** WebRTC publish, RTMP ingest (H.264 video + AAC→Opus audio), and RTSP pull (H.264) with SRT listeners.
+- **Multi-protocol ingest:** WebRTC publish, RTMP ingest (H.264 video + AAC→Opus audio), RTSP pull (H.264) and SRT ingest (MPEG-TS → H.264).
 - **Multi-protocol playback:** WebRTC first, with HLS / DASH fallback.
 - **Per-stream delivery modes:** WebRTC-only, HLS-only, DASH-only or all, switchable from the dashboard or API.
 - **Signed playback tokens:** HMAC tokenization for HLS/DASH, toggleable at runtime from the dashboard.
@@ -27,8 +27,9 @@ mirrors and extends the core enterprise features of Ant Media Server.
 > `/hls/<streamID>/index.m3u8` and `/dash/<streamID>/manifest.mpd`, and
 > optionally recorded. With `audio.enabled`, RTMP AAC audio is transcoded to
 > Opus so WebRTC subscribers receive audio. RTSP sources can be pulled
-> (`ingest.rtsp.sources` or the API) into a WebRTC stream. SRT demuxing remains
-> scaffolded (see [`docs/architecture.md`](docs/architecture.md)).
+> (`ingest.rtsp.sources` or the API) and SRT publishers connect with an MPEG-TS
+> stream; both feed WebRTC subscribers (see
+> [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -382,6 +383,26 @@ The puller uses TCP-interleaved RTP, depacketizes H.264 (single NAL / STAP-A /
 FU-A), and re-packetizes it for WebRTC subscribers. SPS/PPS come from the SDP
 `fmtp` (or in-band), and the session reconnects automatically with backoff.
 
+## SRT ingest
+
+Publishers (OBS, ffmpeg, hardware) connect over SRT carrying MPEG-TS. The stream
+id in the SRT URL becomes the engine stream key:
+
+```bash
+ffmpeg -re -i input.mp4 -c copy -f mpegts \
+  "srt://localhost:8890?streamid=demo&mode=caller"
+```
+
+The engine demuxes the transport stream (PAT/PMT → PES) to H.264, re-packetizes
+it for WebRTC subscribers, and registers the stream in the API. Enable it with:
+
+```yaml
+ingest:
+  srt:
+    enabled: true
+    port: 8890
+```
+
 ## REST API
 
 | Method | Path                                        | Description |
@@ -418,7 +439,7 @@ When `auth.enabled` is true, send `X-API-Key: <key>` or
 ```
 cmd/server (cmd/ari)   Main entry point
 internal/signaling     WebRTC signaling (WebSocket JSON protocol)
-internal/ingest        RTMP demux (FLV → H.264) + RTSP pull + SRT listener
+internal/ingest        RTMP demux + RTSP pull + SRT ingest (MPEG-TS)
 internal/audio         AAC→Opus audio transcode for WebRTC
 internal/webrtc        Pion-based SFU
 internal/transcode     FFmpeg ABR → HLS ladder

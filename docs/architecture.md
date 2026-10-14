@@ -39,6 +39,7 @@ for the remaining enterprise features.
 | `internal/ingest`    | RTMP demux (handshake, chunks, AMF0, FLV → H.264) and SRT/RTSP listeners |
 | `internal/audio`     | AAC→Opus transcode (FFmpeg → Opus RTP) for WebRTC subscribers |
 | `internal/ingest/rtsp` | RTSP pull client: SDP, H.264 depacketizer, reconnect manager |
+| `internal/ingest/srt` | SRT listener + MPEG-TS demux → H.264 |
 | `internal/delivery`  | Embedding security: domain allow-list + CSP `frame-ancestors` + origin guard |
 | `internal/player`    | Embedded HTML5 player page and assets |
 | `internal/api`       | REST control plane (streams, security, stats) |
@@ -120,6 +121,17 @@ manager keys sessions by stream id, retries with a 3s backoff, and notifies the
 control plane via `OnPublish`/`OnUnpublish` so RTSP streams appear in the API.
 
 Sources come from `ingest.rtsp.sources` or `POST /api/v1/rtsp/pull`.
+
+## SRT ingest
+
+`internal/ingest/srt` accepts SRT publishers (via `datarhei/gosrt`) and demuxes
+their MPEG-TS payload. A publisher connects with
+`srt://host:port?streamid=<key>`; the stream id becomes the engine stream key.
+The MPEG-TS demuxer discovers the H.264 elementary stream from the PAT/PMT,
+reassembles PES packets (assuming one access unit per PES, the common live
+case), splits Annex-B start codes into NAL units and writes each access unit to
+the ingest session's video track (SPS/PPS taken in-band). The manager owns the
+listener and active connections and reports lifecycle to the control plane.
 
 ## Audio path
 
@@ -262,7 +274,7 @@ path never needs to change.
 | WebRTC SFU + signaling | ✅ MVP | Trickle ICE, RTP forwarding, simulcast reception |
 | Embed security + player | ✅ MVP | CSP + origin guard + embedded assets |
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
-| RTMP/SRT/RTSP media demux | 🟡 RTMP + RTSP | RTMP FLV→H.264 + AAC→Opus and RTSP pull (H.264) work; SRT pending |
+| RTMP/SRT/RTSP media demux | ✅ MVP | RTMP (FLV→H.264 + AAC→Opus), RTSP pull and SRT (MPEG-TS) ingest |
 | ABR transcoding | ✅ MVP | FFmpeg FLV→HLS ladder, auto start/stop on publish |
 | HLS/DASH packaging | ✅ MVP | HLS master+variants and DASH MPD produced by the ABR pipeline (video-only) |
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |
