@@ -1,5 +1,7 @@
 # Ari Media Engine
 
+[![CI](https://github.com/johndesu090/ari-media-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/johndesu090/ari-media-engine/actions/workflows/ci.yml)
+
 An open-source, high-performance, ultra-low-latency live streaming engine that
 mirrors and extends the core enterprise features of Ant Media Server.
 
@@ -456,8 +458,28 @@ internal/dashboard     Management console (web/dashboard)
 internal/webhook       Lifecycle webhook dispatcher
 pkg/id, pkg/logger     Shared helpers
 configs/               Sample configuration
-docs/                  Architecture and API documentation
+docs/                  Architecture and deployment documentation
+.github/workflows/     CI (build, vet, test, docker build)
 ```
+
+## Deployment
+
+Ready to run it for real? See **[`docs/deployment.md`](docs/deployment.md)**.
+
+- **Ubuntu 24.04:** build from source, run under systemd, terminate TLS with
+  nginx, open the WebRTC UDP range, and add Redis for clustering.
+- **Docker:** a multi-stage image (static Go build + `ffmpeg` runtime) and a
+  Compose stack with Redis and MinIO.
+
+Quick start with Compose:
+
+```bash
+git clone https://github.com/johndesu090/ari-media-engine.git
+cd ari-media-engine
+docker compose up -d --build
+```
+
+Then open <http://localhost:8080/>.
 
 ## Development
 
