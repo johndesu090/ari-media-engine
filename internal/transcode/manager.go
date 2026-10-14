@@ -22,6 +22,9 @@ type Manager struct {
 
 	abr atomic.Bool
 
+	segmentSec atomic.Int64
+	listSize   atomic.Int64
+
 	mu       sync.Mutex
 	sessions map[string]*Session
 }
@@ -33,6 +36,8 @@ func New(cfg Config, log *slog.Logger) *Manager {
 	}
 	m := &Manager{cfg: cfg.withDefaults(), log: log, sessions: map[string]*Session{}}
 	m.abr.Store(cfg.Abr)
+	m.segmentSec.Store(int64(m.cfg.SegmentSec))
+	m.listSize.Store(int64(m.cfg.ListSize))
 	return m
 }
 
@@ -42,6 +47,35 @@ func (m *Manager) Abr() bool { return m.abr.Load() }
 
 // SetAbr toggles the ABR ladder for sessions started after the call.
 func (m *Manager) SetAbr(v bool) { m.abr.Store(v) }
+
+// SegmentSec returns the current HLS target segment duration.
+func (m *Manager) SegmentSec() int { return int(m.segmentSec.Load()) }
+
+// SetSegmentSec updates the HLS target segment duration for new sessions.
+func (m *Manager) SetSegmentSec(v int) {
+	if v > 0 {
+		m.segmentSec.Store(int64(v))
+	}
+}
+
+// ListSize returns the current HLS live playlist size.
+func (m *Manager) ListSize() int { return int(m.listSize.Load()) }
+
+// SetListSize updates the HLS live playlist size for new sessions.
+func (m *Manager) SetListSize(v int) {
+	if v > 0 {
+		m.listSize.Store(int64(v))
+	}
+}
+
+// currentConfig returns the base configuration with the runtime-tunable
+// packaging settings applied.
+func (m *Manager) currentConfig() Config {
+	cfg := m.cfg
+	cfg.SegmentSec = int(m.segmentSec.Load())
+	cfg.ListSize = int(m.listSize.Load())
+	return cfg
+}
 
 // Start launches the FFmpeg processes for streamKey producing the requested
 // formats, and returns their shared FLV sink. A session already running for the
@@ -62,9 +96,10 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 		return nil, fmt.Errorf("transcode: output dir: %w", err)
 	}
 
+	cfg := m.currentConfig()
 	abr := m.abr.Load()
 	if abr && formats&FormatHLS != 0 {
-		if err := writeHLSMaster(outDir, m.cfg.Renditions); err != nil {
+		if err := writeHLSMaster(outDir, cfg.Renditions); err != nil {
 			return nil, fmt.Errorf("transcode: master playlist: %w", err)
 		}
 	}
@@ -73,17 +108,17 @@ func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 	switch {
 	case abr:
 		if formats&FormatHLS != 0 {
-			argSets = append(argSets, buildHLSArgs(m.cfg, streamKey))
+			argSets = append(argSets, buildHLSArgs(cfg, streamKey))
 		}
 		if formats&FormatDASH != 0 {
-			argSets = append(argSets, buildDASHArgs(m.cfg, streamKey))
+			argSets = append(argSets, buildDASHArgs(cfg, streamKey))
 		}
 	default:
 		if formats&FormatHLS != 0 {
-			argSets = append(argSets, buildCopyHLSArgs(m.cfg, streamKey))
+			argSets = append(argSets, buildCopyHLSArgs(cfg, streamKey))
 		}
 		if formats&FormatDASH != 0 {
-			argSets = append(argSets, buildCopyDASHArgs(m.cfg, streamKey))
+			argSets = append(argSets, buildCopyDASHArgs(cfg, streamKey))
 		}
 	}
 

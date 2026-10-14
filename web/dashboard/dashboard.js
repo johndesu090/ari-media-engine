@@ -264,13 +264,22 @@
       try {
         const t = await api("/api/v1/transcode");
         $("abr-enabled").checked = !!t.abr;
+        $("hls-time").value = t.segmentSec || 2;
+        $("hls-list-size").value = t.listSize || 6;
         $("abr-active").textContent = t.active || 0;
       } catch (e) { toast("transcode: " + e.message); }
     }
 
     async function saveTranscode() {
       try {
-        await api("/api/v1/transcode", { method: "PUT", body: JSON.stringify({ abr: $("abr-enabled").checked }) });
+        await api("/api/v1/transcode", {
+          method: "PUT",
+          body: JSON.stringify({
+            abr: $("abr-enabled").checked,
+            segmentSec: parseInt($("hls-time").value, 10) || 2,
+            listSize: parseInt($("hls-list-size").value, 10) || 6
+          })
+        });
         toast("Transcoding settings saved");
         loadTranscode();
       } catch (e) { toast("transcode: " + e.message); }

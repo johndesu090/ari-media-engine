@@ -27,48 +27,54 @@ import (
 
 // Options configures the API server.
 type Options struct {
-	Store           broadcast.Store
-	Engine          *webrtc.Engine
-	Policy          *delivery.DomainPolicy
-	Signer          *delivery.TokenSigner
-	Logger          *slog.Logger
-	Webhooks        *webhook.Dispatcher
-	Auth            config.AuthConfig
-	Sessions        *auth.Store
-	StartedAt       time.Time
-	Transcodes      func() int
-	TranscodeAbr    func() bool
-	SetTranscodeAbr func(bool) error
-	HLSBase         string
-	DashBase        string
-	Cluster         *cluster.Manager
-	Recordings      storage.Store
-	RecordActive    func() int
-	P2P             *p2p.Hub
-	RTSP            *rtsp.Manager
+	Store                 broadcast.Store
+	Engine                *webrtc.Engine
+	Policy                *delivery.DomainPolicy
+	Signer                *delivery.TokenSigner
+	Logger                *slog.Logger
+	Webhooks              *webhook.Dispatcher
+	Auth                  config.AuthConfig
+	Sessions              *auth.Store
+	StartedAt             time.Time
+	Transcodes            func() int
+	TranscodeAbr          func() bool
+	SetTranscodeAbr       func(bool) error
+	TranscodeSegmentSec   func() int
+	TranscodeListSize     func() int
+	SetTranscodePackaging func(segmentSec, listSize int) error
+	HLSBase               string
+	DashBase              string
+	Cluster               *cluster.Manager
+	Recordings            storage.Store
+	RecordActive          func() int
+	P2P                   *p2p.Hub
+	RTSP                  *rtsp.Manager
 }
 
 // Server exposes the REST API.
 type Server struct {
-	store           broadcast.Store
-	engine          *webrtc.Engine
-	policy          *delivery.DomainPolicy
-	signer          *delivery.TokenSigner
-	log             *slog.Logger
-	webhooks        *webhook.Dispatcher
-	auth            config.AuthConfig
-	sessions        *auth.Store
-	startedAt       time.Time
-	transcodes      func() int
-	transcodeAbr    func() bool
-	setTranscodeAbr func(bool) error
-	hlsBase         string
-	dashBase        string
-	cluster         *cluster.Manager
-	recordings      storage.Store
-	recordActive    func() int
-	p2p             *p2p.Hub
-	rtsp            *rtsp.Manager
+	store                 broadcast.Store
+	engine                *webrtc.Engine
+	policy                *delivery.DomainPolicy
+	signer                *delivery.TokenSigner
+	log                   *slog.Logger
+	webhooks              *webhook.Dispatcher
+	auth                  config.AuthConfig
+	sessions              *auth.Store
+	startedAt             time.Time
+	transcodes            func() int
+	transcodeAbr          func() bool
+	setTranscodeAbr       func(bool) error
+	transcodeSegmentSec   func() int
+	transcodeListSize     func() int
+	setTranscodePackaging func(segmentSec, listSize int) error
+	hlsBase               string
+	dashBase              string
+	cluster               *cluster.Manager
+	recordings            storage.Store
+	recordActive          func() int
+	p2p                   *p2p.Hub
+	rtsp                  *rtsp.Manager
 }
 
 // New constructs the API server.
@@ -82,25 +88,28 @@ func New(opts Options) *Server {
 		startedAt = time.Now().UTC()
 	}
 	return &Server{
-		store:           opts.Store,
-		engine:          opts.Engine,
-		policy:          opts.Policy,
-		signer:          opts.Signer,
-		log:             log,
-		webhooks:        opts.Webhooks,
-		auth:            opts.Auth,
-		sessions:        opts.Sessions,
-		startedAt:       startedAt,
-		transcodes:      opts.Transcodes,
-		transcodeAbr:    opts.TranscodeAbr,
-		setTranscodeAbr: opts.SetTranscodeAbr,
-		hlsBase:         opts.HLSBase,
-		dashBase:        opts.DashBase,
-		cluster:         opts.Cluster,
-		recordings:      opts.Recordings,
-		recordActive:    opts.RecordActive,
-		p2p:             opts.P2P,
-		rtsp:            opts.RTSP,
+		store:                 opts.Store,
+		engine:                opts.Engine,
+		policy:                opts.Policy,
+		signer:                opts.Signer,
+		log:                   log,
+		webhooks:              opts.Webhooks,
+		auth:                  opts.Auth,
+		sessions:              opts.Sessions,
+		startedAt:             startedAt,
+		transcodes:            opts.Transcodes,
+		transcodeAbr:          opts.TranscodeAbr,
+		setTranscodeAbr:       opts.SetTranscodeAbr,
+		transcodeSegmentSec:   opts.TranscodeSegmentSec,
+		transcodeListSize:     opts.TranscodeListSize,
+		setTranscodePackaging: opts.SetTranscodePackaging,
+		hlsBase:               opts.HLSBase,
+		dashBase:              opts.DashBase,
+		cluster:               opts.Cluster,
+		recordings:            opts.Recordings,
+		recordActive:          opts.RecordActive,
+		p2p:                   opts.P2P,
+		rtsp:                  opts.RTSP,
 	}
 }
 
@@ -412,38 +421,87 @@ func (s *Server) handleGetTranscode(w http.ResponseWriter, _ *http.Request) {
 	if s.transcodeAbr != nil {
 		abr = s.transcodeAbr()
 	}
+	segmentSec := 0
+	if s.transcodeSegmentSec != nil {
+		segmentSec = s.transcodeSegmentSec()
+	}
+	listSize := 0
+	if s.transcodeListSize != nil {
+		listSize = s.transcodeListSize()
+	}
 	active := 0
 	if s.transcodes != nil {
 		active = s.transcodes()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": enabled, "abr": abr, "active": active})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    enabled,
+		"abr":        abr,
+		"segmentSec": segmentSec,
+		"listSize":   listSize,
+		"active":     active,
+	})
 }
 
-// handlePutTranscode toggles the optional ABR ladder. When disabled streams are
-// remuxed (copied) so playback follows the publisher's settings.
+// handlePutTranscode toggles the optional ABR ladder and updates the HLS
+// segment duration / playlist size. When ABR is disabled streams are remuxed
+// (copied) so playback follows the publisher's settings.
 func (s *Server) handlePutTranscode(w http.ResponseWriter, r *http.Request) {
-	if s.setTranscodeAbr == nil {
+	if s.setTranscodeAbr == nil && s.setTranscodePackaging == nil {
 		writeError(w, http.StatusServiceUnavailable, "transcode_unavailable", "transcoding is not configured")
 		return
 	}
 	var req struct {
-		Abr *bool `json:"abr"`
+		Abr        *bool `json:"abr"`
+		SegmentSec *int  `json:"segmentSec"`
+		ListSize   *int  `json:"listSize"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
 		return
 	}
-	if req.Abr != nil {
+	if req.Abr != nil && s.setTranscodeAbr != nil {
 		if err := s.setTranscodeAbr(*req.Abr); err != nil {
 			writeError(w, http.StatusServiceUnavailable, "transcode_unavailable", err.Error())
 			return
 		}
 	}
+	if (req.SegmentSec != nil || req.ListSize != nil) && s.setTranscodePackaging != nil {
+		segmentSec, listSize := 0, 0
+		if s.transcodeSegmentSec != nil {
+			segmentSec = s.transcodeSegmentSec()
+		}
+		if s.transcodeListSize != nil {
+			listSize = s.transcodeListSize()
+		}
+		if req.SegmentSec != nil {
+			segmentSec = *req.SegmentSec
+		}
+		if req.ListSize != nil {
+			listSize = *req.ListSize
+		}
+		if err := s.setTranscodePackaging(segmentSec, listSize); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_packaging", err.Error())
+			return
+		}
+	}
+
 	abr := false
 	if s.transcodeAbr != nil {
 		abr = s.transcodeAbr()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "abr": abr})
+	segmentSec, listSize := 0, 0
+	if s.transcodeSegmentSec != nil {
+		segmentSec = s.transcodeSegmentSec()
+	}
+	if s.transcodeListSize != nil {
+		listSize = s.transcodeListSize()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    true,
+		"abr":        abr,
+		"segmentSec": segmentSec,
+		"listSize":   listSize,
+	})
 }
 
 // handleListRecordings lists stored recordings.

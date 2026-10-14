@@ -137,6 +137,14 @@
         <label class="muted" style="display:flex; align-items:center; gap:.5rem; margin-bottom:.6rem;">
           <input type="checkbox" id="abr-enabled" style="flex:0"> Enable ABR ladder (1080p / 720p / 480p)
         </label>
+        <div style="display:flex; gap:.5rem; margin-bottom:.6rem;">
+          <label class="muted" style="flex:1">Segment length (<code>hls_time</code>, s)
+            <input id="hls-time" type="number" min="1" step="1" autocomplete="off">
+          </label>
+          <label class="muted" style="flex:1">Playlist size (<code>hls_list_size</code>)
+            <input id="hls-list-size" type="number" min="1" step="1" autocomplete="off">
+          </label>
+        </div>
         <div style="display:flex; gap:.5rem;">
           <button id="save-abr-btn">Save</button>
           <button class="ghost" id="reset-abr-btn">Reset</button>

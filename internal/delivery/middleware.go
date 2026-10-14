@@ -86,6 +86,8 @@ func ApplySecurityHeaders(h http.Header, frameAncestors string) {
 		"media-src 'self' blob:",
 		"connect-src 'self' ws: wss:",
 		"script-src 'self'",
+		"worker-src 'self' blob:",
+		"child-src 'self' blob:",
 		"style-src 'self' 'unsafe-inline'",
 		"base-uri 'self'",
 		"form-action 'self'",

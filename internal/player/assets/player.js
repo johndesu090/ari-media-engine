@@ -3,6 +3,7 @@
  *   hls    -> HLS only
  *   dash   -> DASH only
  *   all    -> HLS first, then DASH
+ * Autoplay is disabled so playback starts (with audio) on a user tap.
  * When tokenization is enabled the page fetches a fresh signed token a few
  * seconds before the current one expires and reloads the source in place.
  * Playback is forced inline (never fullscreen) on every platform. No build step. */
@@ -21,15 +22,12 @@
   var playBtn = document.getElementById("ari-play");
   var muteBtn = document.getElementById("ari-mute");
   var volumeEl = document.getElementById("ari-volume");
-  var latencyBtn = document.getElementById("ari-latency");
-  var latencyOut = document.getElementById("ari-latency-readout");
 
   var state = {
     hls: null,
     dash: null,
     mode: "none",
     lowLatency: cfg.lowLatency !== false,
-    latencyTimer: null,
     tokenTimer: null,
     triedHLS: false,
     triedDASH: false
@@ -76,7 +74,10 @@
   function showTap() { if (tapEl) { tapEl.hidden = false; } }
   function hideTap() { if (tapEl) { tapEl.hidden = true; } }
 
+  // requestPlay must be called from a user gesture so the stream starts with
+  // audio (browsers block un-muted autoplay).
   function requestPlay() {
+    video.muted = false;
     var p = video.play();
     if (p && typeof p.then === "function") {
       p.then(hideTap).catch(function () { showTap(); });
@@ -87,7 +88,6 @@
 
   // nextFallback walks the delivery chain: HLS, then DASH, then error.
   function nextFallback(reason) {
-    stopLatency();
     if (!state.triedHLS && cfg.hlsUrl) { state.triedHLS = true; startHLS(); return; }
     if (!state.triedDASH && cfg.dashUrl) { state.triedDASH = true; startDASH(); return; }
     setStatus("error", "Playback failed: " + reason);
@@ -109,8 +109,6 @@
       state.hls = hls;
       hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
         setStatus("live", "Live · HLS");
-        startLatency();
-        requestPlay();
       });
       hls.on(window.Hls.Events.ERROR, function (_, data) {
         if (data && data.fatal) { nextFallback("HLS error"); }
@@ -124,10 +122,8 @@
     video.src = url;
     video.addEventListener("loadedmetadata", function () {
       setStatus("live", "Live · HLS");
-      startLatency();
     }, { once: true });
     video.addEventListener("error", function () { nextFallback("HLS playback error"); }, { once: true });
-    requestPlay();
   }
 
   function startDASH() {
@@ -140,10 +136,9 @@
       var player = window.dashjs.MediaPlayer().create();
       if (p2p) { p2p.setupDash(player); }
       state.dash = player;
-      player.initialize(video, url, true);
+      player.initialize(video, url, false);
       player.on(window.dashjs.MediaPlayer.events.PLAYBACK_PLAYING, function () {
         setStatus("live", "Live · DASH");
-        startLatency();
       });
       player.on(window.dashjs.MediaPlayer.events.ERROR, function () {
         nextFallback("DASH error");
@@ -163,7 +158,6 @@
         try { state.hls.stopLoad(); state.hls.loadSource(cfg.hlsUrl); state.hls.startLoad(); } catch (e) { /* ignore */ }
       } else if (cfg.hlsUrl) {
         video.src = cfg.hlsUrl;
-        requestPlay();
       }
     } else if (state.mode === "dash" && state.dash) {
       try { state.dash.attachSource(cfg.dashUrl); } catch (e) { /* ignore */ }
@@ -197,37 +191,7 @@
       .then(scheduleTokenRefresh);
   }
 
-  /* ------------------------------ latency ------------------------------- */
-
-  function startLatency() {
-    stopLatency();
-    state.latencyTimer = setInterval(function () {
-      try {
-        if (video.buffered && video.buffered.length) {
-          var end = video.buffered.end(video.buffered.length - 1);
-          var behind = Math.max(0, end - video.currentTime);
-          latencyOut.textContent = Math.round(behind * 1000) + " ms";
-        }
-      } catch (e) { /* ignore */ }
-    }, 1000);
-  }
-
-  function stopLatency() {
-    if (state.latencyTimer) { clearInterval(state.latencyTimer); state.latencyTimer = null; }
-    latencyOut.textContent = "–";
-  }
-
   /* ------------------------------ controls ------------------------------ */
-
-  function applyLowLatency(on) {
-    state.lowLatency = on;
-    latencyBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    video.playbackRate = on ? 1.05 : 1.0;
-    if ("jitterBufferTarget" in video) {
-      try { video.jitterBufferTarget = on ? 200 : 1000; } catch (e) { /* ignore */ }
-    }
-    if (state.hls) { state.hls.lowLatencyMode = on; }
-  }
 
   playBtn.addEventListener("click", function () {
     if (video.paused) { requestPlay(); } else { video.pause(); }
@@ -254,19 +218,10 @@
     muteBtn.textContent = video.muted ? "🔇" : "🔊";
   });
 
-  latencyBtn.addEventListener("click", function () { applyLowLatency(!state.lowLatency); });
-
-  ["pointerdown", "touchstart", "keydown"].forEach(function (evt) {
-    document.addEventListener(evt, function onGesture() {
-      document.removeEventListener(evt, onGesture);
-      if (video.paused) { requestPlay(); }
-    }, { passive: true });
-  });
-
   /* -------------------------------- boot -------------------------------- */
 
   enforceInlinePlayback();
-  applyLowLatency(state.lowLatency);
+  showTap();
 
   if (isIOS()) {
     playerEl.classList.add("ari-ios");

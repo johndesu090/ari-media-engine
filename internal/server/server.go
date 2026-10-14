@@ -323,6 +323,29 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 			transcoder.SetAbr(v)
 			return nil
 		},
+		TranscodeSegmentSec: func() int {
+			if transcoder == nil {
+				return 0
+			}
+			return transcoder.SegmentSec()
+		},
+		TranscodeListSize: func() int {
+			if transcoder == nil {
+				return 0
+			}
+			return transcoder.ListSize()
+		},
+		SetTranscodePackaging: func(segmentSec, listSize int) error {
+			if transcoder == nil {
+				return fmt.Errorf("transcoding is not configured")
+			}
+			if segmentSec <= 0 || listSize <= 0 {
+				return fmt.Errorf("segmentSec and listSize must be positive")
+			}
+			transcoder.SetSegmentSec(segmentSec)
+			transcoder.SetListSize(listSize)
+			return nil
+		},
 		Recordings: objectStore,
 		RecordActive: func() int {
 			return recordings()
