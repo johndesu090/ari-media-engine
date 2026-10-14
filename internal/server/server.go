@@ -519,7 +519,8 @@ func dashboardGuard(authCfg config.AuthConfig, sessions *auth.Store, next http.H
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if r.URL.Path == "/login.html" || r.URL.Path == "/login" {
+		switch r.URL.Path {
+		case "/login.html", "/login", "/login.js":
 			next.ServeHTTP(w, r)
 			return
 		}
