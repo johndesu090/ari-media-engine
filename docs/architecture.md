@@ -105,6 +105,24 @@ Sessions start on RTMP publish and stop on unpublish; a transcode failure never
 drops the WebRTC stream (the extra sink is best-effort). The pipeline is
 video-only for now — audio muxing and DASH output belong to the HLS/DASH track.
 
+## Delivery modes and tokenized playback
+
+Each stream carries a `Delivery` mode (`all`, `webrtc`, `hls`, `dash`) on the
+`Broadcast`. It drives two things:
+
+- **Signaling:** `signaling` refuses `subscribe` when the mode excludes WebRTC.
+- **Packaging:** the transcode manager produces HLS and/or DASH accordingly
+  (`deliveryFormats`); `webrtc`-only streams are not transcoded at all.
+
+`delivery.TokenSigner` mints stateless HMAC-SHA256 tokens
+(`<unixExpiry>.<hexSignature>`) and `delivery.PlaybackServer` enforces them for
+`/hls/` and `/dash/`. The token is a URL **path** segment
+(`/hls/<token>/<streamID>/…`) so relative playlist and segment requests inherit
+it — query strings are not propagated by native HLS or hls.js. The player
+handler mints a token server-side, so playback via `/player.html` keeps working,
+while direct requests without a valid token receive `401`. The API and dashboard
+can also mint tokens for external players.
+
 ## Embedding security
 
 Two independent layers enforce iframe restrictions:
@@ -161,7 +179,8 @@ was chosen so the media path never needs to change.
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
 | RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264→RTP works end-to-end; SRT/RTSP + AAC→Opus pending |
 | ABR transcoding | ✅ MVP | FFmpeg FLV→HLS ladder, auto start/stop on publish |
-| HLS/DASH packaging | 🟡 HLS via ABR | Master + variant HLS produced by the ABR pipeline; DASH and audio muxing pending |
+| HLS/DASH packaging | ✅ MVP | HLS master+variants and DASH MPD produced by the ABR pipeline (video-only) |
+| Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |
 | Redis clustering | ⏳ | `Store` interface ready for a Redis implementation |
 | Recording + S3 sync | ⏳ | Config present; recorder pending |
 | Trickle ICE / simulcast | ⏳ | Reduces setup latency, improves large-scale fan-out |

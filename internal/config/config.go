@@ -26,6 +26,7 @@ type Config struct {
 	Player    PlayerConfig    `yaml:"player"`
 	Webhooks  WebhookConfig   `yaml:"webhooks"`
 	Transcode TranscodeConfig `yaml:"transcode"`
+	Token     TokenConfig     `yaml:"token"`
 }
 
 // ServerConfig controls the HTTP management/API server.
@@ -120,6 +121,15 @@ type PlayerConfig struct {
 	HLSBase    string `yaml:"hls_base"`
 	DashBase   string `yaml:"dash_base"`
 	LowLatency bool   `yaml:"low_latency_default"`
+	// DashJSURL optionally loads a dash.js build for DASH playback.
+	DashJSURL string `yaml:"dash_js_url"`
+}
+
+// TokenConfig controls signed playback tokens for HLS/DASH.
+type TokenConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Secret  string `yaml:"secret"`
+	TTL     int    `yaml:"ttl_sec"`
 }
 
 // WebhookConfig controls stream lifecycle webhook delivery.
@@ -198,6 +208,7 @@ func Default() Config {
 			LowLatency: true,
 		},
 		Webhooks: WebhookConfig{Enabled: false},
+		Token:    TokenConfig{Enabled: false, TTL: 3600},
 		Transcode: TranscodeConfig{
 			Enabled:    false,
 			FFmpegPath: "ffmpeg",
@@ -259,6 +270,10 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Transcode.FFmpegPath, "ARI_TRANSCODE_FFMPEG_PATH")
 	setString(&cfg.Transcode.OutputDir, "ARI_TRANSCODE_OUTPUT_DIR")
 	setInt(&cfg.Transcode.SegmentSec, "ARI_TRANSCODE_SEGMENT_SEC")
+	setBool(&cfg.Token.Enabled, "ARI_TOKEN_ENABLED")
+	setString(&cfg.Token.Secret, "ARI_TOKEN_SECRET")
+	setInt(&cfg.Token.TTL, "ARI_TOKEN_TTL_SEC")
+	setString(&cfg.Player.DashJSURL, "ARI_PLAYER_DASH_JS_URL")
 }
 
 func setStringSlice(dst *[]string, key string) {
@@ -326,6 +341,9 @@ func (c Config) Validate() error {
 		if c.Transcode.SegmentSec <= 0 {
 			return fmt.Errorf("config: transcode.segment_sec must be positive")
 		}
+	}
+	if c.Token.Enabled && c.Token.Secret == "" {
+		return fmt.Errorf("config: token.enabled requires token.secret")
 	}
 	return nil
 }

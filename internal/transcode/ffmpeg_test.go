@@ -1,11 +1,13 @@
 package transcode
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestBuildArgs(t *testing.T) {
+func TestBuildHLSArgs(t *testing.T) {
 	cfg := Config{
 		OutputDir:  "/tmp/hls",
 		SegmentSec: 2,
@@ -17,12 +19,11 @@ func TestBuildArgs(t *testing.T) {
 		},
 	}
 
-	joined := strings.Join(buildArgs(cfg, "demo"), " ")
+	joined := strings.Join(buildHLSArgs(cfg, "demo"), " ")
 	for _, want := range []string{
 		"-f flv -i pipe:0",
 		"-filter_complex [0:v]split=2",
 		"-var_stream_map v:0 v:1",
-		"-master_pl_name index.m3u8",
 		"/tmp/hls/demo/%v/stream.m3u8",
 		"/tmp/hls/demo/%v/seg_%05d.ts",
 		"-hls_time 2",
@@ -33,7 +34,29 @@ func TestBuildArgs(t *testing.T) {
 		"-preset:v:0 veryfast",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("args missing %q\nargs: %s", want, joined)
+			t.Fatalf("HLS args missing %q\nargs: %s", want, joined)
+		}
+	}
+}
+
+func TestBuildDASHArgs(t *testing.T) {
+	cfg := Config{
+		OutputDir:  "/tmp/hls",
+		SegmentSec: 2,
+		Preset:     "veryfast",
+		Renditions: []Rendition{{Name: "720p", Width: 1280, Height: 720, Bitrate: "2800k"}},
+	}
+
+	joined := strings.Join(buildDASHArgs(cfg, "demo"), " ")
+	for _, want := range []string{
+		"-f flv -i pipe:0",
+		"-f dash",
+		"-seg_duration 2",
+		"-adaptation_sets id=0,streams=v",
+		"/tmp/hls/demo/manifest.mpd",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("DASH args missing %q\nargs: %s", want, joined)
 		}
 	}
 }
@@ -45,6 +68,35 @@ func TestDefaultLadder(t *testing.T) {
 	}
 	if l[0].Height != 1080 || l[1].Height != 720 || l[2].Height != 480 {
 		t.Fatalf("unexpected ladder heights: %d, %d, %d", l[0].Height, l[1].Height, l[2].Height)
+	}
+}
+
+func TestWriteHLSMaster(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeHLSMaster(dir, []Rendition{
+		{Width: 1280, Height: 720, Bitrate: "2800k"},
+		{Width: 854, Height: 480, Bitrate: "1200k"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "index.m3u8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{"RESOLUTION=1280x720", "RESOLUTION=854x480", "0/stream.m3u8", "1/stream.m3u8", "BANDWIDTH=2800000"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("master playlist missing %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestParseBitrate(t *testing.T) {
+	cases := map[string]int{"2800k": 2800000, "5m": 5000000, "1200k": 1200000, "900": 900, "": 0, "abc": 0}
+	for in, want := range cases {
+		if got := parseBitrate(in); got != want {
+			t.Errorf("parseBitrate(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 

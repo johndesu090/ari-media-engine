@@ -29,42 +29,61 @@ func New(cfg Config, log *slog.Logger) *Manager {
 	return &Manager{cfg: cfg.withDefaults(), log: log, sessions: map[string]*Session{}}
 }
 
-// Start launches an FFmpeg session for streamKey and returns its FLV sink. A
-// session already running for the key is returned unchanged.
-func (m *Manager) Start(streamKey string) (*Session, error) {
+// Start launches the FFmpeg processes for streamKey producing the requested
+// formats, and returns their shared FLV sink. A session already running for the
+// key is returned unchanged. A zero format set returns (nil, nil).
+func (m *Manager) Start(streamKey string, formats Format) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if s, ok := m.sessions[streamKey]; ok {
 		return s, nil
 	}
+	if formats == 0 {
+		return nil, nil
+	}
+
 	outDir := filepath.Join(m.cfg.OutputDir, streamKey)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("transcode: output dir: %w", err)
 	}
-
-	cmd := exec.Command(m.cfg.FFmpegPath, buildArgs(m.cfg, streamKey)...)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("transcode: stdin pipe: %w", err)
-	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("transcode: start ffmpeg: %w", err)
+	if formats&FormatHLS != 0 {
+		if err := writeHLSMaster(outDir, m.cfg.Renditions); err != nil {
+			return nil, fmt.Errorf("transcode: master playlist: %w", err)
+		}
 	}
 
-	s := &Session{
-		streamKey: streamKey,
-		cmd:       cmd,
-		stdin:     stdin,
-		flv:       newFLVWriter(stdin),
-		log:       m.log.With("stream", streamKey),
-		stderr:    &stderr,
+	var argSets [][]string
+	if formats&FormatHLS != 0 {
+		argSets = append(argSets, buildHLSArgs(m.cfg, streamKey))
 	}
+	if formats&FormatDASH != 0 {
+		argSets = append(argSets, buildDASHArgs(m.cfg, streamKey))
+	}
+
+	s := &Session{streamKey: streamKey, log: m.log.With("stream", streamKey)}
+	var writers []io.Writer
+	for _, args := range argSets {
+		cmd := exec.Command(m.cfg.FFmpegPath, args...)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			s.closeProcs()
+			return nil, fmt.Errorf("transcode: stdin pipe: %w", err)
+		}
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		if err := cmd.Start(); err != nil {
+			_ = stdin.Close()
+			s.closeProcs()
+			return nil, fmt.Errorf("transcode: start ffmpeg: %w", err)
+		}
+		s.procs = append(s.procs, &proc{cmd: cmd, stdin: stdin, stderr: &stderr})
+		writers = append(writers, stdin)
+	}
+
+	s.flv = newFLVWriter(io.MultiWriter(writers...))
 	m.sessions[streamKey] = s
-	m.log.Info("transcode session started", "stream", streamKey, "renditions", len(m.cfg.Renditions))
+	m.log.Info("transcode session started", "stream", streamKey, "renditions", len(m.cfg.Renditions), "formats", formatNames(formats))
 	return s, nil
 }
 
@@ -103,32 +122,49 @@ func (m *Manager) Active() []string {
 	return out
 }
 
-// Session is one FFmpeg transcode process fed by an FLV byte stream.
+func formatNames(f Format) string {
+	var names []string
+	if f&FormatHLS != 0 {
+		names = append(names, "hls")
+	}
+	if f&FormatDASH != 0 {
+		names = append(names, "dash")
+	}
+	return fmt.Sprint(names)
+}
+
+// proc is one FFmpeg process with its stdin and captured stderr.
+type proc struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stderr *bytes.Buffer
+}
+
+// Session is one logical transcode job (one or more FFmpeg processes) fed by a
+// shared FLV byte stream.
 type Session struct {
 	streamKey string
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
+	procs     []*proc
 	flv       *flvWriter
 	log       *slog.Logger
-	stderr    *bytes.Buffer
 
 	mu     sync.Mutex
 	closed bool
 }
 
-// WriteFLVTag writes a raw FLV tag to the FFmpeg input. It satisfies
+// WriteFLVTag writes a raw FLV tag to every FFmpeg input. It satisfies
 // rtmp.FLVSink so the RTMP session can forward media verbatim.
 func (s *Session) WriteFLVTag(tagType uint8, timestamp uint32, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.flv == nil {
 		return nil
 	}
 	return s.flv.writeTag(tagType, timestamp, data)
 }
 
-// Close closes the FFmpeg input and waits for the process to exit, killing it
-// if it does not stop promptly.
+// Close closes every FFmpeg input and waits for the processes to exit, killing
+// any that do not stop promptly.
 func (s *Session) Close() {
 	s.mu.Lock()
 	if s.closed {
@@ -136,29 +172,45 @@ func (s *Session) Close() {
 		return
 	}
 	s.closed = true
-	stdin := s.stdin
+	procs := s.procs
 	s.mu.Unlock()
 
-	if stdin != nil {
-		_ = stdin.Close()
+	for _, p := range procs {
+		if p.stdin != nil {
+			_ = p.stdin.Close()
+		}
 	}
 
 	done := make(chan struct{})
 	go func() {
-		_ = s.cmd.Wait()
+		for _, p := range procs {
+			_ = p.cmd.Wait()
+		}
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		if s.cmd.Process != nil {
-			_ = s.cmd.Process.Kill()
+		for _, p := range procs {
+			if p.cmd.Process != nil {
+				_ = p.cmd.Process.Kill()
+			}
 		}
 		<-done
 	}
 
-	if s.stderr != nil && s.stderr.Len() > 0 {
-		s.log.Debug("ffmpeg exited", "stderr", s.stderr.String())
+	for _, p := range procs {
+		if p.stderr != nil && p.stderr.Len() > 0 {
+			s.log.Debug("ffmpeg exited", "stderr", p.stderr.String())
+		}
 	}
 	s.log.Info("transcode session stopped", "stream", s.streamKey)
+}
+
+func (s *Session) closeProcs() {
+	for _, p := range s.procs {
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+	}
 }

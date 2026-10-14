@@ -35,6 +35,7 @@
   </div>
 
   <script id="ari-config" type="application/json">{{.ConfigJSON}}</script>
+  {{if .DashJSURL}}<script src="{{.DashJSURL}}"></script>{{end}}
   <script src="{{.AssetBase}}/player.js"></script>
 </body>
 </html>

@@ -1,7 +1,10 @@
 /* Ari Media Engine — built-in HTML5 player runtime.
- * Chooses WebRTC for sub-second latency and transparently falls back to HLS/DASH.
- * Playback is forced inline (never fullscreen) on every platform, including
- * iOS Safari, Android Chrome and Android WebViews. No build step, no framework. */
+ * Selects a playback protocol from the stream's delivery mode:
+ *   webrtc -> WebRTC only
+ *   hls    -> HLS only
+ *   dash   -> DASH only
+ *   all    -> WebRTC first, then HLS, then DASH
+ * Playback is forced inline (never fullscreen) on every platform. No build step. */
 (function () {
   "use strict";
 
@@ -24,10 +27,12 @@
     pc: null,
     ws: null,
     hls: null,
+    dash: null,
     mode: "none",
     lowLatency: cfg.lowLatency !== false,
     latencyTimer: null,
-    fallbackTried: false
+    triedHLS: false,
+    triedDASH: false
   };
 
   function setStatus(kind, text) {
@@ -45,13 +50,10 @@
   function isIOS() {
     var ua = navigator.userAgent || "";
     if (/iPad|iPhone|iPod/.test(ua)) { return true; }
-    // iPadOS 13+ reports itself as a Mac, distinguished by touch support.
     return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
   }
 
-  // Force inline playback everywhere. iOS/Android honour playsinline;
-  // Android WebViews (Tencent X5/QQ, some OEM browsers) additionally honour
-  // x5-playsinline and webkit-playsinline. The calls are harmless elsewhere.
+  // Force inline playback everywhere (iOS/Android/WebViews/desktop).
   function enforceInlinePlayback() {
     video.setAttribute("playsinline", "");
     video.setAttribute("webkit-playsinline", "");
@@ -59,7 +61,6 @@
     video.setAttribute("x5-video-player-type", "h5-page");
     video.playsInline = true;
     video.controls = false;
-    // Neutralise legacy iOS fullscreen entry points as a belt-and-braces guard.
     if (typeof video.webkitEnterFullscreen === "function") {
       video.webkitEnterFullscreen = function () {};
     }
@@ -71,8 +72,6 @@
   function showTap() { if (tapEl) { tapEl.hidden = false; } }
   function hideTap() { if (tapEl) { tapEl.hidden = true; } }
 
-  // requestPlay resumes playback and surfaces the tap-to-play affordance when a
-  // browser blocks autoplay (typical on iOS/Android until a user gesture).
   function requestPlay() {
     var p = video.play();
     if (p && typeof p.then === "function") {
@@ -108,7 +107,7 @@
         case "failed":
         case "disconnected":
         case "closed":
-          if (state.mode === "webrtc") { fallback("connection lost"); }
+          if (state.mode === "webrtc") { nextFallback("connection lost"); }
           break;
       }
     };
@@ -134,36 +133,39 @@
               sdp: pc.localDescription.sdp
             }));
           })
-          .catch(function () { fallback("negotiation failed"); });
+          .catch(function () { nextFallback("negotiation failed"); });
       } else if (msg.type === "error") {
-        fallback(msg.error || "signaling error");
+        nextFallback(msg.error || "signaling error");
       }
     };
 
-    ws.onerror = function () { fallback("signaling unavailable"); };
+    ws.onerror = function () { nextFallback("signaling unavailable"); };
     ws.onclose = function () {
-      if (state.mode === "webrtc") { fallback("signaling closed"); }
+      if (state.mode === "webrtc") { nextFallback("signaling closed"); }
     };
   }
 
   function teardownWebRTC() {
     if (state.ws) { try { state.ws.close(); } catch (e) {} state.ws = null; }
     if (state.pc) { try { state.pc.close(); } catch (e) {} state.pc = null; }
-    stopLatency();
   }
 
   /* ---------------------------- HLS / DASH ------------------------------ */
 
-  function fallback(reason) {
-    if (state.fallbackTried) { return; }
-    state.fallbackTried = true;
+  // nextFallback walks the delivery chain: HLS, then DASH, then error.
+  function nextFallback(reason) {
     teardownWebRTC();
+    stopLatency();
+    if (!state.triedHLS && cfg.hlsUrl) { state.triedHLS = true; startHLS(); return; }
+    if (!state.triedDASH && cfg.dashUrl) { state.triedDASH = true; startDASH(); return; }
+    setStatus("error", "Playback failed: " + reason);
+  }
 
-    var url = cfg.hlsUrl;
-    if (!url) { setStatus("error", "No fallback source available"); return; }
-
+  function startHLS() {
     state.mode = "hls";
-    setStatus("connecting", "Falling back · HLS");
+    setStatus("connecting", "Connecting · HLS");
+    var url = cfg.hlsUrl;
+    if (!url) { nextFallback("no HLS source"); return; }
 
     if (window.Hls && window.Hls.isSupported()) {
       var hls = new window.Hls({
@@ -177,20 +179,43 @@
         requestPlay();
       });
       hls.on(window.Hls.Events.ERROR, function (_, data) {
-        if (data && data.fatal) { setStatus("error", "HLS playback error"); }
+        if (data && data.fatal) { nextFallback("HLS error"); }
       });
       hls.loadSource(url);
       hls.attachMedia(video);
       return;
     }
 
+    // Native HLS (Safari/iOS).
     video.src = url;
     video.addEventListener("loadedmetadata", function () {
       setStatus("live", "Live · HLS");
       startLatency();
     }, { once: true });
-    video.addEventListener("error", function () { setStatus("error", "Playback failed"); }, { once: true });
+    video.addEventListener("error", function () { nextFallback("HLS playback error"); }, { once: true });
     requestPlay();
+  }
+
+  function startDASH() {
+    state.mode = "dash";
+    setStatus("connecting", "Connecting · DASH");
+    var url = cfg.dashUrl;
+    if (!url) { nextFallback("no DASH source"); return; }
+
+    if (window.dashjs && window.dashjs.MediaPlayer) {
+      var player = window.dashjs.MediaPlayer().create();
+      state.dash = player;
+      player.initialize(video, url, true);
+      player.on(window.dashjs.MediaPlayer.events.PLAYBACK_PLAYING, function () {
+        setStatus("live", "Live · DASH");
+        startLatency();
+      });
+      player.on(window.dashjs.MediaPlayer.events.ERROR, function () {
+        nextFallback("DASH error");
+      });
+      return;
+    }
+    setStatus("error", "DASH playback requires dash.js (set player.dash_js_url)");
   }
 
   /* ------------------------------ latency ------------------------------- */
@@ -252,7 +277,6 @@
 
   latencyBtn.addEventListener("click", function () { applyLowLatency(!state.lowLatency); });
 
-  // Resume on the first user gesture if autoplay was blocked.
   ["pointerdown", "touchstart", "keydown"].forEach(function (evt) {
     document.addEventListener(evt, function onGesture() {
       document.removeEventListener(evt, onGesture);
@@ -271,9 +295,19 @@
     volumeEl.setAttribute("aria-hidden", "true");
   }
 
-  if (!window.RTCPeerConnection) {
-    fallback("WebRTC unsupported");
-  } else {
-    startWebRTC();
+  switch (cfg.delivery) {
+    case "hls":
+      state.triedHLS = true;
+      startHLS();
+      break;
+    case "dash":
+      state.triedDASH = true;
+      startDASH();
+      break;
+    case "webrtc":
+      if (window.RTCPeerConnection) { startWebRTC(); } else { setStatus("error", "WebRTC is not supported by this browser"); }
+      break;
+    default: // "all"
+      if (window.RTCPeerConnection) { startWebRTC(); } else { nextFallback("WebRTC unsupported"); }
   }
 })();

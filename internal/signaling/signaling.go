@@ -237,6 +237,9 @@ func (s *Server) handleSubscribe(c *wsConn, msg Message, sessions map[string]ses
 	if msg.StreamID == "" {
 		return errors.New("signaling: subscribe requires streamId")
 	}
+	if !s.webRTCEnabled(msg.StreamID) {
+		return errors.New("signaling: stream is not available over WebRTC")
+	}
 	sessionID := msg.SessionID
 	if sessionID == "" {
 		sessionID = newSessionID()
@@ -294,6 +297,21 @@ func (s *Server) setStatus(streamID string, status broadcast.Status) {
 		return
 	}
 	b.SetStatus(status)
+}
+
+// webRTCEnabled reports whether the stream's delivery mode allows WebRTC
+// playback. Unknown streams default to enabled.
+func (s *Server) webRTCEnabled(streamID string) bool {
+	if s.store == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	b, err := s.store.GetByStreamID(ctx, streamID)
+	if err != nil {
+		return true
+	}
+	return b.Delivery().UsesWebRTC()
 }
 
 func originChecker(allowed []string) func(*http.Request) bool {

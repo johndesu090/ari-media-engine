@@ -72,11 +72,17 @@
             <option value="srt">SRT</option>
             <option value="rtsp">RTSP</option>
           </select>
+          <select id="c-delivery">
+            <option value="all">Delivery: all</option>
+            <option value="webrtc">Delivery: WebRTC only</option>
+            <option value="hls">Delivery: HLS only</option>
+            <option value="dash">Delivery: DASH only</option>
+          </select>
           <button type="submit">Create</button>
         </form>
         <table>
           <thead>
-            <tr><th>Stream ID</th><th>Type</th><th>Status</th><th>Viewers</th><th></th></tr>
+            <tr><th>Stream ID</th><th>Type</th><th>Status</th><th>Delivery</th><th>Viewers</th><th></th></tr>
           </thead>
           <tbody id="stream-rows"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
         </table>
@@ -96,6 +102,23 @@
           <button class="ghost" onclick="loadDomains()">Reset</button>
         </div>
         <p class="muted" style="margin-top:.7rem;">Enforced via <code>Content-Security-Policy: frame-ancestors</code> plus server-side origin checks on <code>/player.html</code>.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Playback tokens (HLS / DASH)</h2>
+        <label class="muted" style="display:flex; align-items:center; gap:.5rem; margin-bottom:.6rem;">
+          <input type="checkbox" id="token-enabled" style="flex:0"> Require a signed token for HLS/DASH
+        </label>
+        <div style="display:flex; gap:.5rem; align-items:center; margin-bottom:.6rem;">
+          <span class="muted">Token TTL (seconds)</span>
+          <input type="number" id="token-ttl" min="30" step="30" value="3600" style="flex:1">
+        </div>
+        <div style="display:flex; gap:.5rem;">
+          <button onclick="saveTokenConfig()">Save token settings</button>
+          <button class="ghost" onclick="loadTokenConfig()">Reset</button>
+        </div>
+        <p class="muted" style="margin-top:.7rem;">Tokens are HMAC-signed and embedded in the URL path
+          (<code>/hls/&lt;token&gt;/&lt;streamId&gt;/…</code>) so playlists and segments stay authorized.</p>
       </div>
 
       <div class="panel">
@@ -156,7 +179,7 @@
       const tbody = $("stream-rows");
       try {
         const data = await api("/api/v1/streams");
-        if (!data.streams.length) { tbody.innerHTML = '<tr><td colspan="5" class="muted">No streams yet.</td></tr>'; return; }
+        if (!data.streams.length) { tbody.innerHTML = '<tr><td colspan="6" class="muted">No streams yet.</td></tr>'; return; }
         tbody.innerHTML = "";
         for (const s of data.streams) {
           const tr = document.createElement("tr");
@@ -164,17 +187,21 @@
             '<td><code>' + escapeHtml(s.streamId) + '</code></td>' +
             '<td>' + escapeHtml(s.type) + '</td>' +
             '<td><span class="pill ' + s.status + '">' + s.status + '</span></td>' +
+            '<td>' + deliverySelect(s.id, s.delivery || "all") + '</td>' +
             '<td>' + (s.viewerCount || 0) + '</td>' +
             '<td><div class="row-actions">' +
               '<button class="ghost" data-open="' + escapeHtml(s.streamId) + '">Player</button>' +
+              '<button class="ghost" data-token="' + escapeHtml(s.id) + '">Token</button>' +
               '<button class="ghost" data-embed="' + escapeHtml(s.streamId) + '">Embed</button>' +
               '<button class="danger" data-del="' + escapeHtml(s.id) + '">Delete</button>' +
             '</div></td>';
           tbody.appendChild(tr);
         }
         tbody.querySelectorAll("[data-open]").forEach(b => b.onclick = () => openPlayer(b.dataset.open));
+        tbody.querySelectorAll("[data-token]").forEach(b => b.onclick = () => showToken(b.dataset.token));
         tbody.querySelectorAll("[data-embed]").forEach(b => b.onclick = () => showEmbed(b.dataset.embed));
         tbody.querySelectorAll("[data-del]").forEach(b => b.onclick = () => deleteStream(b.dataset.del));
+        tbody.querySelectorAll("[data-delivery]").forEach(sel => sel.onchange = () => setDelivery(sel.dataset.delivery, sel.value));
       } catch (e) { tbody.innerHTML = '<tr><td colspan="5" class="muted">' + escapeHtml(e.message) + '</td></tr>'; }
     }
 
@@ -198,7 +225,7 @@
     async function createStream(ev) {
       ev.preventDefault();
       try {
-        const body = { streamId: $("c-id").value.trim(), name: $("c-name").value.trim(), type: $("c-type").value };
+        const body = { streamId: $("c-id").value.trim(), name: $("c-name").value.trim(), type: $("c-type").value, delivery: $("c-delivery").value };
         await api("/api/v1/streams", { method: "POST", body: JSON.stringify(body) });
         $("c-id").value = ""; $("c-name").value = "";
         toast("Stream created");
@@ -236,7 +263,59 @@
       return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
 
-    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadDomains(); }
+    function deliverySelect(id, mode) {
+      const opts = ["all", "webrtc", "hls", "dash"];
+      let html = '<select data-delivery="' + escapeHtml(id) + '" style="flex:0; min-width:96px">';
+      for (const o of opts) {
+        html += '<option value="' + o + '"' + (o === mode ? " selected" : "") + '>' + o + '</option>';
+      }
+      return html + "</select>";
+    }
+
+    async function setDelivery(id, mode) {
+      try {
+        await api("/api/v1/streams/" + encodeURIComponent(id) + "/delivery", {
+          method: "PUT", body: JSON.stringify({ delivery: mode })
+        });
+        toast("Delivery set to " + mode);
+      } catch (e) { toast("delivery: " + e.message); }
+    }
+
+    async function showToken(id) {
+      try {
+        const d = await api("/api/v1/streams/" + encodeURIComponent(id) + "/token", { method: "POST" });
+        const lines = ["stream: " + d.streamId + "   delivery: " + d.delivery];
+        if (d.tokenEnabled) { lines.push("token: " + d.token); } else { lines.push("tokenization is off"); }
+        if (d.hlsUrl) { lines.push("HLS:  " + base + d.hlsUrl); }
+        if (d.dashUrl) { lines.push("DASH: " + base + d.dashUrl); }
+        $("quickstart").textContent = lines.join("\n");
+        toast("Tokenized URL ready below");
+      } catch (e) { toast("token: " + e.message); }
+    }
+
+    async function loadTokenConfig() {
+      try {
+        const t = await api("/api/v1/security/token");
+        $("token-enabled").checked = !!t.enabled;
+        if (t.ttlSeconds) { $("token-ttl").value = t.ttlSeconds; }
+      } catch (e) { toast("token config: " + e.message); }
+    }
+
+    async function saveTokenConfig() {
+      try {
+        await api("/api/v1/security/token", {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: $("token-enabled").checked,
+            ttlSeconds: parseInt($("token-ttl").value, 10) || 3600
+          })
+        });
+        toast("Token settings saved");
+        loadTokenConfig();
+      } catch (e) { toast("save token: " + e.message); }
+    }
+
+    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadDomains(); loadTokenConfig(); }
 
     $("create-form").addEventListener("submit", createStream);
     $("quickstart").textContent =

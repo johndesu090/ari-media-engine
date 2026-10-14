@@ -37,6 +37,39 @@ const (
 	StatusError Status = "error"
 )
 
+// Delivery selects which playback protocols a stream exposes.
+type Delivery string
+
+const (
+	// DeliveryAll exposes WebRTC, HLS and DASH.
+	DeliveryAll Delivery = "all"
+	// DeliveryWebRTC exposes WebRTC only.
+	DeliveryWebRTC Delivery = "webrtc"
+	// DeliveryHLS exposes HLS only.
+	DeliveryHLS Delivery = "hls"
+	// DeliveryDASH exposes DASH only.
+	DeliveryDASH Delivery = "dash"
+)
+
+// Valid reports whether the delivery mode is recognised.
+func (d Delivery) Valid() bool {
+	switch d {
+	case DeliveryAll, DeliveryWebRTC, DeliveryHLS, DeliveryDASH:
+		return true
+	default:
+		return false
+	}
+}
+
+// UsesWebRTC reports whether the mode includes WebRTC playback.
+func (d Delivery) UsesWebRTC() bool { return d == DeliveryAll || d == DeliveryWebRTC }
+
+// UsesHLS reports whether the mode includes HLS playback.
+func (d Delivery) UsesHLS() bool { return d == DeliveryAll || d == DeliveryHLS }
+
+// UsesDASH reports whether the mode includes DASH playback.
+func (d Delivery) UsesDASH() bool { return d == DeliveryAll || d == DeliveryDASH }
+
 // Snapshot is an immutable, JSON-friendly view of a Broadcast.
 type Snapshot struct {
 	ID          string            `json:"id"`
@@ -44,6 +77,7 @@ type Snapshot struct {
 	StreamID    string            `json:"streamId"`
 	Type        Type              `json:"type"`
 	Status      Status            `json:"status"`
+	Delivery    Delivery          `json:"delivery"`
 	CreatedAt   time.Time         `json:"createdAt"`
 	StartedAt   *time.Time        `json:"startedAt,omitempty"`
 	EndedAt     *time.Time        `json:"endedAt,omitempty"`
@@ -60,6 +94,7 @@ type Broadcast struct {
 	streamID  string
 	btype     Type
 	status    Status
+	delivery  Delivery
 	createdAt time.Time
 	startedAt *time.Time
 	endedAt   *time.Time
@@ -75,6 +110,7 @@ func New(id, streamID, name string, btype Type) *Broadcast {
 		streamID:  streamID,
 		btype:     btype,
 		status:    StatusCreated,
+		delivery:  DeliveryAll,
 		createdAt: time.Now().UTC(),
 		metadata:  map[string]string{},
 	}
@@ -142,6 +178,23 @@ func (b *Broadcast) ViewerCount() int {
 	return b.viewers
 }
 
+// Delivery returns the configured playback delivery mode.
+func (b *Broadcast) Delivery() Delivery {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.delivery == "" {
+		return DeliveryAll
+	}
+	return b.delivery
+}
+
+// SetDelivery updates the playback delivery mode.
+func (b *Broadcast) SetDelivery(d Delivery) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.delivery = d
+}
+
 // SetMetadata replaces the broadcast metadata map.
 func (b *Broadcast) SetMetadata(meta map[string]string) {
 	b.mu.Lock()
@@ -167,6 +220,7 @@ func (b *Broadcast) Snapshot() Snapshot {
 		StreamID:    b.streamID,
 		Type:        b.btype,
 		Status:      b.status,
+		Delivery:    b.delivery,
 		CreatedAt:   b.createdAt,
 		StartedAt:   b.startedAt,
 		EndedAt:     b.endedAt,

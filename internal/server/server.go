@@ -63,6 +63,16 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 
 	store := broadcast.NewMemoryStore()
 	policy := delivery.NewDomainPolicy(cfg.Security.AllowedDomains, cfg.Security.AllowAllEmbed)
+	signer := delivery.NewTokenSigner(cfg.Token.Enabled, cfg.Token.Secret, time.Duration(cfg.Token.TTL)*time.Second)
+
+	deliveryOf := func(streamID string) broadcast.Delivery {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if b, err := store.GetByStreamID(ctx, streamID); err == nil {
+			return b.Delivery()
+		}
+		return broadcast.DeliveryAll
+	}
 
 	var hooks signaling.Hooks
 	var webhooks *webhook.Dispatcher
@@ -96,6 +106,9 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		DashBase:   cfg.Player.DashBase,
 		PublicURL:  cfg.Server.PublicURL,
 		LowLatency: cfg.Player.LowLatency,
+		DashJSURL:  cfg.Player.DashJSURL,
+		Signer:     signer,
+		Delivery:   deliveryOf,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server: player: %w", err)
@@ -114,7 +127,18 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 			Renditions: toRenditions(cfg.Transcode.Renditions),
 		}, log)
 		newFLVSink = func(streamKey string) (rtmp.FLVSink, error) {
-			return transcoder.Start(streamKey)
+			formats := deliveryFormats(deliveryOf(streamKey))
+			if formats == 0 {
+				return nil, nil
+			}
+			session, err := transcoder.Start(streamKey, formats)
+			if err != nil {
+				return nil, err
+			}
+			if session == nil {
+				return nil, nil
+			}
+			return session, nil
 		}
 	}
 
@@ -129,11 +153,14 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		Store:      store,
 		Engine:     engine,
 		Policy:     policy,
+		Signer:     signer,
 		Logger:     log,
 		Webhooks:   webhooks,
 		Auth:       cfg.Auth,
 		StartedAt:  time.Now().UTC(),
 		Transcodes: transcodes,
+		HLSBase:    cfg.Player.HLSBase,
+		DashBase:   cfg.Player.DashBase,
 	})
 
 	root := http.NewServeMux()
@@ -151,13 +178,17 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	root.Handle("GET /player.html", guard.Middleware(http.HandlerFunc(playerHandler.ServePlayer)))
 	root.Handle("GET "+player.AssetPath+"/", playerHandler.Assets())
 
-	// HLS/DASH output, served from disk when packaging is enabled.
+	// HLS/DASH output, served from disk with optional token enforcement.
 	if cfg.HLS.Enabled {
-		hlsDir := cfg.HLS.OutputDir
-		if err := os.MkdirAll(hlsDir, 0o755); err == nil {
-			root.Handle("GET /hls/", http.StripPrefix("/hls/", http.FileServer(http.Dir(hlsDir))))
+		playbackRoot := cfg.HLS.OutputDir
+		if cfg.Transcode.Enabled && cfg.Transcode.OutputDir != "" {
+			playbackRoot = cfg.Transcode.OutputDir
+		}
+		if err := os.MkdirAll(playbackRoot, 0o755); err == nil {
+			root.Handle("GET /hls/", &delivery.PlaybackServer{Root: playbackRoot, Prefix: "/hls", Signer: signer, Log: log})
+			root.Handle("GET /dash/", &delivery.PlaybackServer{Root: playbackRoot, Prefix: "/dash", Signer: signer, Log: log})
 		} else {
-			log.Warn("hls output dir unavailable", "dir", hlsDir, "err", err)
+			log.Warn("playback output dir unavailable", "dir", playbackRoot, "err", err)
 		}
 	}
 
@@ -295,6 +326,18 @@ func upsertStream(store broadcast.Store, streamKey string, status broadcast.Stat
 		return
 	}
 	b.SetStatus(status)
+}
+
+// deliveryFormats maps a delivery mode to the packaging formats to produce.
+func deliveryFormats(d broadcast.Delivery) transcode.Format {
+	var f transcode.Format
+	if d.UsesHLS() {
+		f |= transcode.FormatHLS
+	}
+	if d.UsesDASH() {
+		f |= transcode.FormatDASH
+	}
+	return f
 }
 
 // toRenditions converts configuration rungs into transcode renditions.

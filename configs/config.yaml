@@ -78,6 +78,8 @@ player:
   hls_base: /hls
   dash_base: /dash
   low_latency_default: true
+  # Optional dash.js build loaded for DASH playback (CDN or self-hosted).
+  dash_js_url: ""
 
 webhooks:
   enabled: false
@@ -113,3 +115,10 @@ transcode:
       bitrate: 1200k
       maxrate: 1284k
       bufsize: 1800k
+
+# Signed playback tokens for HLS/DASH. When enabled, playlists and segments must
+# carry a valid token in the URL path; the dashboard can toggle this at runtime.
+token:
+  enabled: false
+  secret: ""
+  ttl_sec: 3600

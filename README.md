@@ -6,19 +6,22 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery.
 - **Multi-protocol ingest:** WebRTC publish, plus RTMP ingest (H.264) and SRT / RTSP listeners.
 - **Multi-protocol playback:** WebRTC first, with HLS / DASH fallback.
-- **Adaptive bitrate (ABR):** on-the-fly FFmpeg transcoding into a multi-rendition HLS ladder (1080p/720p/480p).
+- **Per-stream delivery modes:** WebRTC-only, HLS-only, DASH-only or all, switchable from the dashboard or API.
+- **Signed playback tokens:** HMAC tokenization for HLS/DASH, toggleable at runtime from the dashboard.
+- **Adaptive bitrate (ABR):** on-the-fly FFmpeg transcoding into a multi-rendition HLS/DASH ladder (1080p/720p/480p).
 - **Iframe embedding security:** strict CSP `frame-ancestors` plus a server-side origin guard, configurable globally or per stream.
 - **Built-in HTML5 player:** self-hosted, embeddable, zero-dependency, with automatic protocol selection.
 - **Control plane:** REST API, WebSocket signaling, lifecycle webhooks, and a management dashboard.
 - **Horizontal clustering:** Redis-backed node discovery and state (roadmap).
 
 > **Status:** Phase 1 MVP. The WebRTC SFU, signaling, REST control plane,
-> embedding security, player, dashboard, **RTMP ingest** and **ABR transcoding**
-> are functional. RTMP publishes are demuxed (FLV → H.264) and fanned out to
-> WebRTC subscribers, and optionally transcoded into an HLS ABR ladder served at
-> `/hls/<streamID>/index.m3u8`. SRT/RTSP demuxing, AAC→Opus audio transcoding,
-> DASH packaging and Redis clustering are scaffolded with clear extension points
-> (see [`docs/architecture.md`](docs/architecture.md)).
+> embedding security, player, dashboard, **RTMP ingest**, **ABR transcoding**,
+> **per-stream delivery modes** and **HLS/DASH tokenization** are functional.
+> RTMP publishes are demuxed (FLV → H.264) and fanned out to WebRTC subscribers,
+> and optionally transcoded into an HLS/DASH ABR ladder served at
+> `/hls/<streamID>/index.m3u8` and `/dash/<streamID>/manifest.mpd`. SRT/RTSP
+> demuxing, AAC→Opus audio transcoding and Redis clustering are scaffolded with
+> clear extension points (see [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -81,6 +84,10 @@ overrides. Highlights:
 | `transcode.enabled`                  | `ARI_TRANSCODE_ENABLED`            | Enable the FFmpeg ABR → HLS pipeline |
 | `transcode.ffmpeg_path`              | `ARI_TRANSCODE_FFMPEG_PATH`        | ffmpeg executable (default `ffmpeg`) |
 | `transcode.output_dir`               | `ARI_TRANSCODE_OUTPUT_DIR`         | HLS output root, served at `/hls` |
+| `token.enabled`                      | `ARI_TOKEN_ENABLED`                | Require signed tokens for HLS/DASH |
+| `token.secret`                       | `ARI_TOKEN_SECRET`                 | HMAC signing secret |
+| `token.ttl_sec`                      | `ARI_TOKEN_TTL_SEC`                | Token lifetime in seconds |
+| `player.dash_js_url`                 | `ARI_PLAYER_DASH_JS_URL`           | Optional dash.js build for DASH playback |
 | `auth.enabled` / `auth.api_key`      | `ARI_AUTH_ENABLED`/`ARI_API_KEY`   | API key protection for control-plane routes |
 
 ## Configuring allowed embedding domains
@@ -205,6 +212,48 @@ is unavailable. Transcode sessions start on publish and stop on unpublish, and
 `/api/v1/stats` reports the active count as `transcoding`. Requires `ffmpeg` on
 the host (bundled in the Docker image).
 
+## Delivery modes and playback tokens
+
+Every stream has a **delivery mode** that controls which playback protocols it
+exposes:
+
+| Mode     | Player behaviour                                             |
+| -------- | ------------------------------------------------------------ |
+| `all`    | WebRTC first, falling back to HLS, then DASH (default)       |
+| `webrtc` | WebRTC only (subscribers using HLS/DASH are rejected)        |
+| `hls`    | HLS only (WebRTC signaling is refused; no transcode needed)  |
+| `dash`   | DASH only                                                    |
+
+Set it per stream from the dashboard dropdown or the API:
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/streams/demo/delivery \
+  -H 'Content-Type: application/json' -d '{"delivery":"hls"}'
+```
+
+The delivery mode also drives packaging: `webrtc` skips transcoding, `hls`/`dash`
+produce only that format, and `all` produces both.
+
+**Tokenization** (HLS/DASH) is a runtime toggle in the dashboard's *Playback
+tokens* panel or via the API:
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/security/token \
+  -H 'Content-Type: application/json' -d '{"enabled":true,"ttlSeconds":3600}'
+```
+
+When enabled, playlists and segments require an HMAC token carried in the URL
+path (`/hls/<token>/<streamID>/…`), so relative segment requests stay authorized.
+Mint one for a stream (the dashboard's **Token** button does the same):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/streams/demo/token
+```
+
+The built-in player mints tokens automatically, so playback through
+`/player.html` keeps working; direct HLS/DASH requests without a valid token get
+`401`.
+
 ## REST API
 
 | Method | Path                                        | Description |
@@ -216,6 +265,10 @@ the host (bundled in the Docker image).
 | GET    | `/api/v1/streams/{id}`                      | Get a stream |
 | DELETE | `/api/v1/streams/{id}`                      | Delete a stream |
 | GET    | `/api/v1/streams/{id}/stats`                | Per-stream stats + effective embed policy |
+| PUT    | `/api/v1/streams/{id}/delivery`             | Set the playback delivery mode |
+| POST   | `/api/v1/streams/{id}/token`                | Mint a signed playback token and tokenized URLs |
+| GET    | `/api/v1/security/token`                    | Get tokenization settings |
+| PUT    | `/api/v1/security/token`                    | Update tokenization settings |
 | GET    | `/api/v1/security/domains`                  | Get global embedding policy |
 | PUT    | `/api/v1/security/domains`                  | Set global embedding policy |
 | GET    | `/api/v1/security/streams/{id}/domains`     | Get per-stream policy |

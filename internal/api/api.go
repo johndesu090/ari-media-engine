@@ -24,11 +24,14 @@ type Options struct {
 	Store      broadcast.Store
 	Engine     *webrtc.Engine
 	Policy     *delivery.DomainPolicy
+	Signer     *delivery.TokenSigner
 	Logger     *slog.Logger
 	Webhooks   *webhook.Dispatcher
 	Auth       config.AuthConfig
 	StartedAt  time.Time
 	Transcodes func() int
+	HLSBase    string
+	DashBase   string
 }
 
 // Server exposes the REST API.
@@ -36,11 +39,14 @@ type Server struct {
 	store      broadcast.Store
 	engine     *webrtc.Engine
 	policy     *delivery.DomainPolicy
+	signer     *delivery.TokenSigner
 	log        *slog.Logger
 	webhooks   *webhook.Dispatcher
 	auth       config.AuthConfig
 	startedAt  time.Time
 	transcodes func() int
+	hlsBase    string
+	dashBase   string
 }
 
 // New constructs the API server.
@@ -57,11 +63,14 @@ func New(opts Options) *Server {
 		store:      opts.Store,
 		engine:     opts.Engine,
 		policy:     opts.Policy,
+		signer:     opts.Signer,
 		log:        log,
 		webhooks:   opts.Webhooks,
 		auth:       opts.Auth,
 		startedAt:  startedAt,
 		transcodes: opts.Transcodes,
+		hlsBase:    opts.HLSBase,
+		dashBase:   opts.DashBase,
 	}
 }
 
@@ -86,11 +95,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/streams/{id}", protect(s.handleGetStream))
 	mux.Handle("DELETE /api/v1/streams/{id}", protect(s.handleDeleteStream))
 	mux.Handle("GET /api/v1/streams/{id}/stats", protect(s.handleStreamStats))
+	mux.Handle("PUT /api/v1/streams/{id}/delivery", protect(s.handleSetDelivery))
+	mux.Handle("POST /api/v1/streams/{id}/token", protect(s.handleCreateToken))
 
 	mux.Handle("GET /api/v1/security/domains", protect(s.handleGetGlobalDomains))
 	mux.Handle("PUT /api/v1/security/domains", protect(s.handlePutGlobalDomains))
 	mux.Handle("GET /api/v1/security/streams/{id}/domains", protect(s.handleGetStreamDomains))
 	mux.Handle("PUT /api/v1/security/streams/{id}/domains", protect(s.handlePutStreamDomains))
+	mux.Handle("GET /api/v1/security/token", protect(s.handleGetTokenConfig))
+	mux.Handle("PUT /api/v1/security/token", protect(s.handlePutTokenConfig))
 }
 
 // requireAuth enforces the configured API key on control-plane routes.
@@ -171,6 +184,7 @@ type createStreamRequest struct {
 	StreamID string            `json:"streamId"`
 	Name     string            `json:"name"`
 	Type     string            `json:"type"`
+	Delivery string            `json:"delivery"`
 	Metadata map[string]string `json:"metadata"`
 }
 
@@ -201,6 +215,14 @@ func (s *Server) handleCreateStream(w http.ResponseWriter, r *http.Request) {
 	if req.Metadata != nil {
 		b.SetMetadata(req.Metadata)
 	}
+	if req.Delivery != "" {
+		mode := broadcast.Delivery(strings.ToLower(strings.TrimSpace(req.Delivery)))
+		if !mode.Valid() {
+			writeError(w, http.StatusBadRequest, "invalid_delivery", "delivery must be one of all, webrtc, hls, dash")
+			return
+		}
+		b.SetDelivery(mode)
+	}
 	if err := s.store.Create(rctx(), b); err != nil {
 		if errors.Is(err, broadcast.ErrExists) {
 			writeError(w, http.StatusConflict, "stream_exists", "a stream with that id already exists")
@@ -215,7 +237,7 @@ func (s *Server) handleCreateStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetStream(w http.ResponseWriter, r *http.Request) {
-	b, err := s.store.Get(rctx(), r.PathValue("id"))
+	b, err := s.lookupStream(r.PathValue("id"))
 	if err != nil {
 		s.writeLookupError(w, err)
 		return
@@ -224,13 +246,12 @@ func (s *Server) handleGetStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	b, err := s.store.Get(rctx(), id)
+	b, err := s.lookupStream(r.PathValue("id"))
 	if err != nil {
 		s.writeLookupError(w, err)
 		return
 	}
-	if err := s.store.Delete(rctx(), id); err != nil {
+	if err := s.store.Delete(rctx(), b.ID()); err != nil {
 		s.writeLookupError(w, err)
 		return
 	}
@@ -240,7 +261,7 @@ func (s *Server) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStreamStats(w http.ResponseWriter, r *http.Request) {
-	b, err := s.store.Get(rctx(), r.PathValue("id"))
+	b, err := s.lookupStream(r.PathValue("id"))
 	if err != nil {
 		s.writeLookupError(w, err)
 		return
@@ -252,6 +273,117 @@ func (s *Server) handleStreamStats(w http.ResponseWriter, r *http.Request) {
 		"protocol":     "webrtc",
 		"embedDomains": s.policy.Effective(b.StreamID()),
 	})
+}
+
+type deliveryRequest struct {
+	Delivery string `json:"delivery"`
+}
+
+func (s *Server) handleSetDelivery(w http.ResponseWriter, r *http.Request) {
+	b, err := s.lookupStream(r.PathValue("id"))
+	if err != nil {
+		s.writeLookupError(w, err)
+		return
+	}
+	var req deliveryRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	mode := broadcast.Delivery(strings.ToLower(strings.TrimSpace(req.Delivery)))
+	if !mode.Valid() {
+		writeError(w, http.StatusBadRequest, "invalid_delivery", "delivery must be one of all, webrtc, hls, dash")
+		return
+	}
+	b.SetDelivery(mode)
+	writeJSON(w, http.StatusOK, s.snapshot(b))
+}
+
+// handleCreateToken returns a signed playback token (when tokenization is on)
+// and the tokenized HLS/DASH URLs for the stream's delivery mode.
+func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
+	b, err := s.lookupStream(r.PathValue("id"))
+	if err != nil {
+		s.writeLookupError(w, err)
+		return
+	}
+	mode := b.Delivery()
+	streamID := b.StreamID()
+
+	resp := map[string]any{
+		"streamId":     streamID,
+		"delivery":     string(mode),
+		"tokenEnabled": s.signer != nil && s.signer.Enabled(),
+	}
+
+	var token string
+	if s.signer != nil && s.signer.Enabled() {
+		tok, exp := s.signer.Sign(streamID)
+		token = tok
+		resp["token"] = tok
+		resp["expiresAt"] = exp
+	}
+	if mode.UsesHLS() {
+		resp["hlsUrl"] = s.mediaURL(s.hlsBase, streamID, "index.m3u8", token)
+	}
+	if mode.UsesDASH() {
+		resp["dashUrl"] = s.mediaURL(s.dashBase, streamID, "manifest.mpd", token)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type tokenConfigRequest struct {
+	Enabled    *bool   `json:"enabled"`
+	TTLSeconds *int    `json:"ttlSeconds"`
+	Secret     *string `json:"secret"`
+}
+
+func (s *Server) handleGetTokenConfig(w http.ResponseWriter, _ *http.Request) {
+	ttl := 0
+	if s.signer != nil {
+		ttl = int(s.signer.TTL().Seconds())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    s.signer != nil && s.signer.Enabled(),
+		"ttlSeconds": ttl,
+	})
+}
+
+func (s *Server) handlePutTokenConfig(w http.ResponseWriter, r *http.Request) {
+	if s.signer == nil {
+		writeError(w, http.StatusServiceUnavailable, "token_unavailable", "token signing is not configured")
+		return
+	}
+	var req tokenConfigRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if req.Secret != nil && *req.Secret != "" {
+		s.signer.SetSecret(*req.Secret)
+	}
+	if req.TTLSeconds != nil && *req.TTLSeconds > 0 {
+		s.signer.SetTTL(time.Duration(*req.TTLSeconds) * time.Second)
+	}
+	if req.Enabled != nil {
+		if *req.Enabled {
+			s.signer.EnsureSecret()
+		}
+		s.signer.SetEnabled(*req.Enabled)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":    s.signer.Enabled(),
+		"ttlSeconds": int(s.signer.TTL().Seconds()),
+	})
+}
+
+// mediaURL builds a playback URL, inserting a token path segment when present.
+func (s *Server) mediaURL(base, streamID, file, token string) string {
+	segment := streamID
+	if token != "" {
+		segment = token + "/" + streamID
+	}
+	return "/" + strings.Trim(strings.Join([]string{strings.Trim(base, "/"), segment, file}, "/"), "/")
 }
 
 /* -------------------------------- security -------------------------------- */
@@ -321,6 +453,15 @@ func (s *Server) resolveStreamID(idOrStream string) string {
 		return b.StreamID()
 	}
 	return idOrStream
+}
+
+// lookupStream resolves a broadcast by id, falling back to the stream key so
+// callers may use either identifier.
+func (s *Server) lookupStream(idOrStream string) (*broadcast.Broadcast, error) {
+	if b, err := s.store.Get(rctx(), idOrStream); err == nil {
+		return b, nil
+	}
+	return s.store.GetByStreamID(rctx(), idOrStream)
 }
 
 /* --------------------------------- helpers -------------------------------- */
