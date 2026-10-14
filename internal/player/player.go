@@ -50,6 +50,15 @@ type Config struct {
 	Signer *delivery.TokenSigner
 	// Delivery resolves the delivery mode for a stream id.
 	Delivery func(streamID string) broadcast.Delivery
+	// ICEServers are STUN/TURN servers the browser should use.
+	ICEServers []ICEServer
+}
+
+// ICEServer is a STUN/TURN server advertised to the player.
+type ICEServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
 }
 
 // Handler renders the player page and serves its static assets.
@@ -80,13 +89,14 @@ type viewData struct {
 
 // playerConfig is serialized into the page for the JavaScript runtime.
 type playerConfig struct {
-	StreamID   string    `json:"streamId"`
-	WSPath     string    `json:"wsPath"`
-	HLSURL     string    `json:"hlsUrl"`
-	DashURL    string    `json:"dashUrl"`
-	Delivery   string    `json:"delivery"`
-	LowLatency bool      `json:"lowLatency"`
-	P2P        p2pConfig `json:"p2p"`
+	StreamID   string      `json:"streamId"`
+	WSPath     string      `json:"wsPath"`
+	HLSURL     string      `json:"hlsUrl"`
+	DashURL    string      `json:"dashUrl"`
+	Delivery   string      `json:"delivery"`
+	LowLatency bool        `json:"lowLatency"`
+	P2P        p2pConfig   `json:"p2p"`
+	ICEServers []ICEServer `json:"iceServers,omitempty"`
 }
 
 type p2pConfig struct {
@@ -116,6 +126,7 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 		Delivery:   string(mode),
 		LowLatency: h.cfg.LowLatency,
 		P2P:        p2pConfig{Enabled: h.cfg.P2PEnabled, WSPath: h.cfg.P2PWsPath},
+		ICEServers: h.cfg.ICEServers,
 	}
 	if mode.UsesHLS() {
 		pc.HLSURL = h.mediaURL(h.cfg.HLSBase, streamID, "index.m3u8")

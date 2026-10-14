@@ -70,6 +70,8 @@ type Config struct {
 	EnableLoopback bool
 	// MaxSubscribers caps subscribers per stream (0 = unlimited).
 	MaxSubscribers int
+	// ICEServers are STUN/TURN servers used when gathering candidates.
+	ICEServers []pion.ICEServer
 }
 
 // Engine owns every stream and PeerConnection in the process.
@@ -174,7 +176,7 @@ func (e *Engine) Publish(streamID, sessionID, offerSDP string, onCandidate func(
 	}
 	s.mu.Unlock()
 
-	pc, err := e.api.NewPeerConnection(pion.Configuration{})
+	pc, err := e.api.NewPeerConnection(pion.Configuration{ICEServers: e.cfg.ICEServers})
 	if err != nil {
 		return "", err
 	}
@@ -261,7 +263,7 @@ func (e *Engine) Subscribe(streamID, sessionID string, onCandidate func(ICECandi
 		return "", ErrNotLive
 	}
 
-	pc, err := e.api.NewPeerConnection(pion.Configuration{})
+	pc, err := e.api.NewPeerConnection(pion.Configuration{ICEServers: e.cfg.ICEServers})
 	if err != nil {
 		return "", err
 	}

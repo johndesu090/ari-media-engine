@@ -22,6 +22,13 @@ webrtc:
   ice_udp_port_max: 50100
   enable_loopback: true
   max_subscribers_per_broadcast: 1000
+  # Optional STUN/TURN servers (public ICE) used by the engine and the player.
+  # STUN discovers addresses; TURN relays media when direct UDP is blocked.
+  #   - urls: ["stun:stun.l.google.com:19302"]
+  #   - urls: ["turn:turn.example.com:3478"]
+  #     username: user
+  #     credential: pass
+  ice_servers: []
 
 log:
   level: info

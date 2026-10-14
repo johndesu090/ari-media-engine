@@ -94,7 +94,7 @@
     setStatus("connecting", "Connecting · WebRTC");
     state.mode = "webrtc";
 
-    var pc = new RTCPeerConnection({ iceServers: [] });
+    var pc = new RTCPeerConnection({ iceServers: (cfg.iceServers && cfg.iceServers.length) ? cfg.iceServers : [] });
     state.pc = pc;
 
     pc.ontrack = function (ev) {

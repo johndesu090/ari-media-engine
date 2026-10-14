@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	pion "github.com/pion/webrtc/v4"
+
 	"github.com/johndesu090/ari-media-engine/internal/api"
 	"github.com/johndesu090/ari-media-engine/internal/audio"
 	"github.com/johndesu090/ari-media-engine/internal/auth"
@@ -77,6 +79,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		ICEUDPPortMax:  cfg.WebRTC.ICEUDPPortMax,
 		EnableLoopback: cfg.WebRTC.EnableLoopback,
 		MaxSubscribers: cfg.WebRTC.MaxSubscribers,
+		ICEServers:     toICEServers(cfg.WebRTC.ICEServers),
 	}, log)
 	if err != nil {
 		return nil, fmt.Errorf("server: webrtc engine: %w", err)
@@ -134,6 +137,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		P2PWsPath:  cfg.P2P.WSPath,
 		Signer:     signer,
 		Delivery:   deliveryOf,
+		ICEServers: toPlayerICEServers(cfg.WebRTC.ICEServers),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server: player: %w", err)
@@ -558,6 +562,24 @@ func dashboardHandler(dir string) http.Handler {
 		})
 	}
 	return http.FileServer(http.Dir(dir))
+}
+
+// toICEServers converts configuration ICE servers into Pion ICE servers.
+func toICEServers(in []config.ICEServerConfig) []pion.ICEServer {
+	out := make([]pion.ICEServer, 0, len(in))
+	for _, s := range in {
+		out = append(out, pion.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
+	}
+	return out
+}
+
+// toPlayerICEServers converts configuration ICE servers for the browser player.
+func toPlayerICEServers(in []config.ICEServerConfig) []player.ICEServer {
+	out := make([]player.ICEServer, 0, len(in))
+	for _, s := range in {
+		out = append(out, player.ICEServer{URLs: s.URLs, Username: s.Username, Credential: s.Credential})
+	}
+	return out
 }
 
 // parseRTSPSource parses an RTSP source entry: "streamId=url" or a bare URL

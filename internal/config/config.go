@@ -67,6 +67,16 @@ type WebRTCConfig struct {
 	ICEUDPPortMax  int      `yaml:"ice_udp_port_max"`
 	EnableLoopback bool     `yaml:"enable_loopback"`
 	MaxSubscribers int      `yaml:"max_subscribers_per_broadcast"`
+	// ICEServers are STUN/TURN servers used for gathering (public ICE). TURN
+	// relays media when direct UDP is blocked.
+	ICEServers []ICEServerConfig `yaml:"ice_servers"`
+}
+
+// ICEServerConfig is a STUN or TURN server.
+type ICEServerConfig struct {
+	URLs       []string `yaml:"urls"`
+	Username   string   `yaml:"username"`
+	Credential string   `yaml:"credential"`
 }
 
 // LogConfig controls structured logging.
@@ -303,6 +313,16 @@ func applyEnv(cfg *Config) {
 	setInt(&cfg.WebRTC.ICEUDPPortMin, "ARI_ICE_UDP_PORT_MIN")
 	setInt(&cfg.WebRTC.ICEUDPPortMax, "ARI_ICE_UDP_PORT_MAX")
 	setBool(&cfg.WebRTC.EnableLoopback, "ARI_WEBRTC_ENABLE_LOOPBACK")
+	if v, ok := os.LookupEnv("ARI_ICE_SERVERS"); ok {
+		urls := splitList(v)
+		if len(urls) > 0 {
+			cfg.WebRTC.ICEServers = []ICEServerConfig{{
+				URLs:       urls,
+				Username:   os.Getenv("ARI_ICE_SERVER_USERNAME"),
+				Credential: os.Getenv("ARI_ICE_SERVER_CREDENTIAL"),
+			}}
+		}
+	}
 	setBool(&cfg.Ingest.RTMP.Enabled, "ARI_RTMP_ENABLED")
 	setInt(&cfg.Ingest.RTMP.Port, "ARI_RTMP_PORT")
 	setBool(&cfg.Ingest.SRT.Enabled, "ARI_SRT_ENABLED")
@@ -355,10 +375,12 @@ func applyEnv(cfg *Config) {
 }
 
 func setStringSlice(dst *[]string, key string) {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return
+	if v, ok := os.LookupEnv(key); ok {
+		*dst = splitList(v)
 	}
+}
+
+func splitList(v string) []string {
 	parts := strings.Split(v, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -366,7 +388,7 @@ func setStringSlice(dst *[]string, key string) {
 			out = append(out, p)
 		}
 	}
-	*dst = out
+	return out
 }
 
 func setString(dst *string, key string) {
