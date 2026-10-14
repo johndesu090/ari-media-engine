@@ -69,6 +69,14 @@ type Handler struct {
 
 // New parses the embedded templates and returns a Handler.
 func New(cfg Config) (*Handler, error) {
+	// Default to the bundled, self-hosted hls.js / dash.js so HLS and DASH
+	// playback work without a CDN (which the CSP would block).
+	if cfg.HLSJSURL == "" {
+		cfg.HLSJSURL = AssetPath + "/vendor/hls.min.js"
+	}
+	if cfg.DashJSURL == "" {
+		cfg.DashJSURL = AssetPath + "/vendor/dash.all.min.js"
+	}
 	tmpl, err := template.ParseFS(assets, "assets/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("player: parse templates: %w", err)

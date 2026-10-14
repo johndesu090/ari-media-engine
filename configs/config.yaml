@@ -104,9 +104,9 @@ player:
   hls_base: /hls
   dash_base: /dash
   low_latency_default: true
-  # Optional dash.js build loaded for DASH playback (CDN or self-hosted).
+  # Optional dash.js build for DASH playback (defaults to the bundled build).
   dash_js_url: ""
-  # Optional hls.js build loaded for HLS playback (CDN or self-hosted).
+  # Optional hls.js build for HLS playback (defaults to the bundled build).
   hls_js_url: ""
 
 webhooks:
