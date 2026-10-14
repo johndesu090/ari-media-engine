@@ -163,9 +163,14 @@ prompt_admin_password() {
 write_config() {
   local public_ip public_url api_key token_secret admin_password
   public_ip="$(detect_public_ip)"
-  public_url="${ARI_PUBLIC_URL:-http://${public_ip}:${ARI_HTTP_PORT}}"
-  if [ -n "${ARI_DOMAIN:-}" ]; then
+  if [ -n "${ARI_PUBLIC_URL:-}" ]; then
+    public_url="${ARI_PUBLIC_URL}"
+  elif [ -n "${ARI_DOMAIN:-}" ]; then
     public_url="https://${ARI_DOMAIN}"
+  elif [ -n "${ARI_TLS_CERT}" ] && [ -n "${ARI_TLS_KEY}" ]; then
+    public_url="https://${public_ip}$([ "${ARI_HTTP_PORT}" = "443" ] || printf ':%s' "${ARI_HTTP_PORT}")"
+  else
+    public_url="http://${public_ip}$([ "${ARI_HTTP_PORT}" = "80" ] || printf ':%s' "${ARI_HTTP_PORT}")"
   fi
   api_key="$(rand_hex)"
   token_secret="$(rand_hex)"

@@ -128,11 +128,19 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 		P2P:        p2pConfig{Enabled: h.cfg.P2PEnabled, WSPath: h.cfg.P2PWsPath},
 		ICEServers: h.cfg.ICEServers,
 	}
+	// Build playback URLs on the public base, but fall back to same-origin
+	// relative URLs when the configured base would be mixed content (an http
+	// origin on an https page), which the browser and CSP would block.
+	publicBase := h.cfg.PublicURL
+	if publicBase != "" && requestHTTPS(r) && strings.HasPrefix(strings.ToLower(publicBase), "http://") {
+		publicBase = ""
+	}
+
 	if mode.UsesHLS() {
-		pc.HLSURL = h.mediaURL(h.cfg.HLSBase, streamID, "index.m3u8")
+		pc.HLSURL = h.mediaURL(publicBase, h.cfg.HLSBase, streamID, "index.m3u8")
 	}
 	if mode.UsesDASH() {
-		pc.DashURL = h.mediaURL(h.cfg.DashBase, streamID, "manifest.mpd")
+		pc.DashURL = h.mediaURL(publicBase, h.cfg.DashBase, streamID, "manifest.mpd")
 	}
 
 	raw, err := json.Marshal(pc)
@@ -165,8 +173,9 @@ func (h *Handler) Assets() http.Handler {
 }
 
 // mediaURL builds a playback URL, inserting a signed token path segment when
-// tokenization is enabled so relative segment requests keep the token.
-func (h *Handler) mediaURL(base, streamID, file string) string {
+// tokenization is enabled so relative segment requests keep the token. When
+// publicBase is empty a same-origin relative URL is returned.
+func (h *Handler) mediaURL(publicBase, base, streamID, file string) string {
 	segment := streamID
 	if h.cfg.Signer != nil && h.cfg.Signer.Enabled() {
 		if token, _ := h.cfg.Signer.Sign(streamID); token != "" {
@@ -174,8 +183,17 @@ func (h *Handler) mediaURL(base, streamID, file string) string {
 		}
 	}
 	path := strings.Trim(strings.Join([]string{strings.Trim(base, "/"), segment, file}, "/"), "/")
-	if h.cfg.PublicURL == "" {
+	if publicBase == "" {
 		return "/" + path
 	}
-	return strings.TrimRight(h.cfg.PublicURL, "/") + "/" + path
+	return strings.TrimRight(publicBase, "/") + "/" + path
+}
+
+// requestHTTPS reports whether the player page was served over TLS (directly or
+// via a reverse proxy).
+func requestHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
