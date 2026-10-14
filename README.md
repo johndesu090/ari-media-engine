@@ -13,9 +13,11 @@ mirrors and extends the core enterprise features of Ant Media Server.
 - **Horizontal clustering:** Redis-backed node discovery and state (roadmap).
 
 > **Status:** Phase 1 MVP. The WebRTC SFU, signaling, REST control plane,
-> embedding security, player and dashboard are functional. RTMP/SRT/RTSP media
-> demuxing, ABR transcoding and Redis clustering are scaffolded with clear
-> extension points (see [`docs/architecture.md`](docs/architecture.md)).
+> embedding security, player, dashboard and **RTMP ingest** are functional.
+> RTMP publishes are demuxed (FLV → H.264) and fanned out to WebRTC subscribers.
+> SRT/RTSP demuxing, AAC→Opus audio transcoding, ABR, HLS/DASH packaging and
+> Redis clustering are scaffolded with clear extension points (see
+> [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -118,10 +120,22 @@ per-stream list clears the override and falls back to the global policy.
 
 2. Publish to it. The player page and signaling endpoint share the same origin:
 
-   - **Browser publisher:** open `/player.html?id=demo` for playback and use any
-     WebRTC publish client against `ws://localhost:8080/ws`.
-   - **OBS / RTMP:** server `rtmp://localhost:1935/live`, stream key `demo`
-     (media demuxing is on the roadmap; the listener accepts connections today).
+   - **WebRTC publisher:** use any WebRTC publish client against
+     `ws://localhost:8080/ws` (see the signaling protocol below).
+   - **OBS / RTMP:** server `rtmp://localhost:1935/live`, stream key `demo`.
+     RTMP publishers are demuxed (FLV → H.264) and fanned out to WebRTC
+     subscribers, and appear in the API/dashboard automatically.
+   - **ffmpeg (one-liner test):**
+
+     ```bash
+     ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+       -c:v libx264 -preset ultrafast -tune zerolatency \
+       -f flv rtmp://localhost:1935/live/demo
+     ```
+
+     > RTMP audio (AAC) is parsed but not yet forwarded: browsers require Opus
+     > over WebRTC, so AAC→Opus transcoding is part of the next roadmap track.
+     > RTMP→WebRTC currently delivers H.264 video.
 
 3. Watch: open <http://localhost:8080/player.html?id=demo>. The player selects
    WebRTC automatically and falls back to HLS if WebRTC is blocked.
@@ -136,6 +150,28 @@ per-stream list clears the override and falls back to the global policy.
 
    Loading the same embed from a **non** allow-listed origin is blocked by CSP
    and returns `403` from the guard.
+
+### Inline playback and platform support
+
+The player always plays inline and never takes over the screen as fullscreen,
+on every major platform:
+
+- **iOS / iPadOS (Safari, WebView, Chrome, Firefox):** `playsinline` +
+  `webkit-playsinline` are set, and the legacy `webkitEnterFullscreen` entry
+  point is neutralised. Autoplay starts muted (as iOS requires) and a
+  tap-to-play overlay appears if the browser still blocks it.
+- **Android (Chrome, Samsung Internet, WebView, Tencent X5/QQ):** `playsinline`,
+  `webkit-playsinline`, `x5-playsinline` and `x5-video-player-type=h5-page` are
+  applied to keep playback inside the page.
+- **Desktop (Windows, macOS, Linux):** inline is the default; the same
+  attributes are harmless.
+- **Volume:** iOS ignores programmatic volume, so the volume slider is hidden
+  there and the mute toggle remains; other platforms keep the full slider.
+- **Autoplay policy:** playback is retried on the first user gesture and a
+  `Tap to play` affordance is shown whenever the browser refuses to start.
+
+Embeds should keep `allow="autoplay"` on the `<iframe>` so muted autoplay is
+permitted inside the frame.
 
 ## REST API
 
@@ -161,7 +197,7 @@ When `auth.enabled` is true, send `X-API-Key: <key>` or
 ```
 cmd/server (cmd/ari)   Main entry point
 internal/signaling     WebRTC signaling (WebSocket JSON protocol)
-internal/ingest        RTMP / SRT / RTSP listeners
+internal/ingest        RTMP demux (FLV → H.264) + SRT/RTSP listeners
 internal/webrtc        Pion-based SFU
 internal/transcoding   ABR pipeline (roadmap)
 internal/delivery      Embedding security (domain policy + CSP middleware)

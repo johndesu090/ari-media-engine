@@ -133,6 +133,7 @@ type stream struct {
 
 	mu          sync.RWMutex
 	publisher   *peer
+	ingest      *IngestSession
 	subscribers map[string]*peer
 	tracks      []*pion.TrackLocalStaticRTP
 	live        bool
@@ -345,6 +346,7 @@ func (e *Engine) Shutdown() {
 			subs = append(subs, sp)
 		}
 		s.publisher = nil
+		s.ingest = nil
 		s.subscribers = make(map[string]*peer)
 		s.mu.Unlock()
 
@@ -409,6 +411,33 @@ func (e *Engine) removePublisher(streamID, sessionID string) {
 		sp.close()
 	}
 	s.log.Info("publisher removed; stream reset", "session", sessionID, "subscribers", len(subs))
+}
+
+// removeIngest tears down an ingest session's track and resets the stream.
+func (s *stream) removeIngest(session *IngestSession) {
+	s.mu.Lock()
+	if s.ingest != session {
+		s.mu.Unlock()
+		return
+	}
+	subs := make([]*peer, 0, len(s.subscribers))
+	for _, sp := range s.subscribers {
+		subs = append(subs, sp)
+	}
+	s.ingest = nil
+	s.subscribers = make(map[string]*peer)
+	s.tracks = nil
+	s.live = false
+	if s.liveTimer != nil {
+		s.liveTimer.Stop()
+		s.liveTimer = nil
+	}
+	s.mu.Unlock()
+
+	for _, sp := range subs {
+		sp.close()
+	}
+	s.log.Info("ingest session removed; stream reset", "subscribers", len(subs))
 }
 
 func (s *stream) isLive() bool {

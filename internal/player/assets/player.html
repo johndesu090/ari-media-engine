@@ -9,7 +9,13 @@
 </head>
 <body class="ari-body">
   <div class="ari-player" id="ari-player" data-stream-id="{{.StreamID}}">
-    <video id="ari-video" playsinline muted autoplay></video>
+    <video id="ari-video" playsinline webkit-playsinline x5-playsinline
+           x5-video-player-type="h5-page" muted autoplay preload="auto"></video>
+
+    <button id="ari-tap" class="ari-tap" type="button" hidden>
+      <span class="ari-tap-icon" aria-hidden="true">▶</span>
+      <span class="ari-tap-label">Tap to play</span>
+    </button>
 
     <div class="ari-overlay">
       <div class="ari-status" id="ari-status" data-state="connecting" role="status" aria-live="polite">

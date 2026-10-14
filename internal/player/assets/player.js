@@ -1,6 +1,7 @@
 /* Ari Media Engine — built-in HTML5 player runtime.
  * Chooses WebRTC for sub-second latency and transparently falls back to HLS/DASH.
- * No build step, no framework: drop it in an iframe and go. */
+ * Playback is forced inline (never fullscreen) on every platform, including
+ * iOS Safari, Android Chrome and Android WebViews. No build step, no framework. */
 (function () {
   "use strict";
 
@@ -8,7 +9,9 @@
   var cfg = {};
   try { cfg = JSON.parse((cfgEl && cfgEl.textContent) || "{}"); } catch (e) { cfg = {}; }
 
+  var playerEl = document.getElementById("ari-player");
   var video = document.getElementById("ari-video");
+  var tapEl = document.getElementById("ari-tap");
   var statusEl = document.getElementById("ari-status");
   var statusText = document.getElementById("ari-status-text");
   var playBtn = document.getElementById("ari-play");
@@ -37,6 +40,46 @@
     return proto + "//" + location.host + (cfg.wsPath || "/ws");
   }
 
+  /* --------------------------- platform support -------------------------- */
+
+  function isIOS() {
+    var ua = navigator.userAgent || "";
+    if (/iPad|iPhone|iPod/.test(ua)) { return true; }
+    // iPadOS 13+ reports itself as a Mac, distinguished by touch support.
+    return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+  }
+
+  // Force inline playback everywhere. iOS/Android honour playsinline;
+  // Android WebViews (Tencent X5/QQ, some OEM browsers) additionally honour
+  // x5-playsinline and webkit-playsinline. The calls are harmless elsewhere.
+  function enforceInlinePlayback() {
+    video.setAttribute("playsinline", "");
+    video.setAttribute("webkit-playsinline", "");
+    video.setAttribute("x5-playsinline", "");
+    video.setAttribute("x5-video-player-type", "h5-page");
+    video.playsInline = true;
+    video.controls = false;
+    // Neutralise legacy iOS fullscreen entry points as a belt-and-braces guard.
+    if (typeof video.webkitEnterFullscreen === "function") {
+      video.webkitEnterFullscreen = function () {};
+    }
+    if (typeof video.webkitSupportsFullscreen !== "undefined") {
+      video.webkitSupportsFullscreen = false;
+    }
+  }
+
+  function showTap() { if (tapEl) { tapEl.hidden = false; } }
+  function hideTap() { if (tapEl) { tapEl.hidden = true; } }
+
+  // requestPlay resumes playback and surfaces the tap-to-play affordance when a
+  // browser blocks autoplay (typical on iOS/Android until a user gesture).
+  function requestPlay() {
+    var p = video.play();
+    if (p && typeof p.then === "function") {
+      p.then(hideTap).catch(function () { showTap(); });
+    }
+  }
+
   /* ------------------------------- WebRTC ------------------------------- */
 
   function startWebRTC() {
@@ -53,7 +96,7 @@
         if (!video.srcObject) { video.srcObject = new MediaStream(); }
         video.srcObject.addTrack(ev.track);
       }
-      video.play().catch(function () {});
+      requestPlay();
     };
 
     pc.onconnectionstatechange = function () {
@@ -131,7 +174,7 @@
       hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
         setStatus("live", "Live · HLS");
         startLatency();
-        video.play().catch(function () {});
+        requestPlay();
       });
       hls.on(window.Hls.Events.ERROR, function (_, data) {
         if (data && data.fatal) { setStatus("error", "HLS playback error"); }
@@ -147,7 +190,7 @@
       startLatency();
     }, { once: true });
     video.addEventListener("error", function () { setStatus("error", "Playback failed"); }, { once: true });
-    video.play().catch(function () {});
+    requestPlay();
   }
 
   /* ------------------------------ latency ------------------------------- */
@@ -183,18 +226,23 @@
   }
 
   playBtn.addEventListener("click", function () {
-    if (video.paused) { video.play().catch(function () {}); } else { video.pause(); }
+    if (video.paused) { requestPlay(); } else { video.pause(); }
   });
   video.addEventListener("click", function () {
-    if (video.paused) { video.play().catch(function () {}); } else { video.pause(); }
+    if (video.paused) { requestPlay(); } else { video.pause(); }
   });
   video.addEventListener("play", function () { playBtn.textContent = "❚❚"; });
+  video.addEventListener("playing", hideTap);
   video.addEventListener("pause", function () { playBtn.textContent = "▶"; });
+
+  if (tapEl) {
+    tapEl.addEventListener("click", function () { requestPlay(); });
+  }
 
   muteBtn.addEventListener("click", function () {
     video.muted = !video.muted;
     muteBtn.textContent = video.muted ? "🔇" : "🔊";
-    volumeEl.value = video.muted ? 0 : video.volume;
+    if (!isIOS()) { volumeEl.value = video.muted ? 0 : video.volume; }
   });
   volumeEl.addEventListener("input", function () {
     video.volume = parseFloat(volumeEl.value);
@@ -204,9 +252,24 @@
 
   latencyBtn.addEventListener("click", function () { applyLowLatency(!state.lowLatency); });
 
+  // Resume on the first user gesture if autoplay was blocked.
+  ["pointerdown", "touchstart", "keydown"].forEach(function (evt) {
+    document.addEventListener(evt, function onGesture() {
+      document.removeEventListener(evt, onGesture);
+      if (video.paused) { requestPlay(); }
+    }, { passive: true });
+  });
+
   /* -------------------------------- boot -------------------------------- */
 
+  enforceInlinePlayback();
   applyLowLatency(state.lowLatency);
+
+  if (isIOS()) {
+    playerEl.classList.add("ari-ios");
+    volumeEl.disabled = true;
+    volumeEl.setAttribute("aria-hidden", "true");
+  }
 
   if (!window.RTCPeerConnection) {
     fallback("WebRTC unsupported");

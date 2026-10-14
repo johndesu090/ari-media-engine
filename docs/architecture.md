@@ -36,7 +36,7 @@ for the remaining enterprise features.
 | `internal/broadcast` | Live-stream domain model (`Broadcast`) and `Store` abstraction |
 | `internal/webrtc`    | Pion-based SFU: one publisher fanned out to many subscribers |
 | `internal/signaling` | WebSocket JSON signaling driving the SFU |
-| `internal/ingest`    | RTMP/SRT/RTSP listener lifecycle with pluggable handlers |
+| `internal/ingest`    | RTMP demux (handshake, chunks, AMF0, FLV → H.264) and SRT/RTSP listeners |
 | `internal/delivery`  | Embedding security: domain allow-list + CSP `frame-ancestors` + origin guard |
 | `internal/player`    | Embedded HTML5 player page and assets |
 | `internal/api`       | REST control plane (streams, security, stats) |
@@ -60,6 +60,29 @@ for the remaining enterprise features.
 ICE is non-trickle: the full SDP is exchanged in a single message, which is
 simpler and proxy-friendly. Trickle ICE, simulcast/SVC and congestion control
 are follow-ups.
+
+## RTMP ingest path
+
+`internal/ingest/rtmp` implements the publisher side of RTMP:
+
+1. **Handshake** — the RTMP simple handshake (C0/C1/S0/S1/S2/C2).
+2. **Chunk streams** — basic + message header parsing with format 0–3 chunks,
+   extended timestamps, chunk-size changes and multi-chunk reassembly.
+3. **AMF0** — decoding of `connect`, `createStream` and `publish`, and encoding
+   of `_result`/`onStatus` replies.
+4. **FLV demux** — video tags are decoded from the AVC (`AVCDecoderConfiguration
+   Record` → SPS/PPS; length-prefixed samples → NAL units).
+5. **Fan-out** — `webrtc.IngestSession` creates an H.264 `TrackLocalStaticRTP`,
+   sends SPS/PPS in-band via STAP-A before each keyframe, and packetizes access
+   units with RFC 6184 single-NALU / FU-A framing. Subscribers then receive the
+   stream exactly like a native WebRTC publisher.
+
+Publish lifecycle (`OnPublish`/`OnUnpublish`) updates the control-plane
+`Broadcast` record, so RTMP streams appear in the REST API and dashboard.
+
+Remaining in this track: SRT and RTSP demuxing, and AAC→Opus audio transcoding
+(WebRTC browsers do not negotiate AAC, so RTMP→WebRTC currently carries H.264
+video).
 
 ## Embedding security
 
@@ -94,6 +117,13 @@ The UI exposes play/pause, mute, volume, a live-status indicator and a
 low-latency toggle. The latency readout estimates buffer-behind
 (`buffered.end - currentTime`).
 
+Playback is forced inline on every platform: `playsinline` and
+`webkit-playsinline` (iOS/iPadOS), plus `x5-playsinline` and
+`x5-video-player-type=h5-page` for Android WebViews; the legacy iOS
+`webkitEnterFullscreen` entry point is neutralised. Autoplay starts muted and a
+tap-to-play overlay plus first-gesture retry covers strict autoplay policies.
+On iOS the volume slider is hidden because programmatic volume is ignored.
+
 ## Scaling and state
 
 `broadcast.Store` is an interface with an in-memory implementation today. A
@@ -108,7 +138,7 @@ was chosen so the media path never needs to change.
 | WebRTC SFU + signaling | ✅ MVP | Non-trickle ICE, RTP forwarding |
 | Embed security + player | ✅ MVP | CSP + origin guard + embedded assets |
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
-| RTMP/SRT/RTSP media demux | ⏳ | Listener lifecycle present; demux + repacketize to RTP pending |
+| RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264→RTP works end-to-end; SRT/RTSP + AAC→Opus pending |
 | ABR transcoding | ⏳ | FFmpeg/GPU pipeline; player already consumes multi-variant HLS |
 | HLS/DASH packaging | ⏳ | Output dir + serving wired; segmenter pending |
 | Redis clustering | ⏳ | `Store` interface ready for a Redis implementation |

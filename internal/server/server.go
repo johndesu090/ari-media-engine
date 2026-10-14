@@ -22,6 +22,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/signaling"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
 	"github.com/johndesu090/ari-media-engine/internal/webrtc"
+	"github.com/johndesu090/ari-media-engine/pkg/id"
 )
 
 // Server owns the lifecycle of a single Ari Media Engine node.
@@ -33,7 +34,10 @@ type Server struct {
 	store  broadcast.Store
 	policy *delivery.DomainPolicy
 	ingest *ingest.Manager
-	http   *http.Server
+
+	rtmpHandler ingest.Handler
+
+	http *http.Server
 }
 
 // New builds a Server from configuration.
@@ -141,6 +145,10 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		store:  store,
 		policy: policy,
 		ingest: ingest.New(log),
+		rtmpHandler: ingest.NewRTMPHandler(engine, log, ingest.RTMPHooks{
+			OnPublish:   func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusLive) },
+			OnUnpublish: func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusEnded) },
+		}),
 		http: &http.Server{
 			Addr:         cfg.Addr(),
 			Handler:      handler,
@@ -188,7 +196,7 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) startIngest(ctx context.Context) error {
 	var specs []ingest.Listener
 	if s.cfg.Ingest.RTMP.Enabled {
-		specs = append(specs, ingest.Listener{Protocol: ingest.ProtocolRTMP, Addr: fmt.Sprintf(":%d", s.cfg.Ingest.RTMP.Port)})
+		specs = append(specs, ingest.Listener{Protocol: ingest.ProtocolRTMP, Addr: fmt.Sprintf(":%d", s.cfg.Ingest.RTMP.Port), Handler: s.rtmpHandler})
 	}
 	if s.cfg.Ingest.SRT.Enabled {
 		specs = append(specs, ingest.Listener{Protocol: ingest.ProtocolSRT, Addr: fmt.Sprintf(":%d", s.cfg.Ingest.SRT.Port)})
@@ -231,4 +239,23 @@ func registerDashboard(mux *http.ServeMux, dir string) {
 		return
 	}
 	mux.Handle("GET /", http.FileServer(http.Dir(dir)))
+}
+
+// upsertStream creates or updates the control-plane record for an ingest stream
+// so that RTMP (and future SRT/RTSP) publishers appear in the API and dashboard.
+func upsertStream(store broadcast.Store, streamKey string, status broadcast.Status) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	b, err := store.GetByStreamID(ctx, streamKey)
+	switch {
+	case errors.Is(err, broadcast.ErrNotFound):
+		b = broadcast.New(id.New("bc"), streamKey, streamKey, broadcast.TypeRTMP)
+		if err := store.Create(ctx, b); err != nil {
+			return
+		}
+	case err != nil:
+		return
+	}
+	b.SetStatus(status)
 }

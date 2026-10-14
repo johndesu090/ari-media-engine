@@ -34,6 +34,31 @@ html, body {
   background: #000;
 }
 
+/* Tap-to-play affordance shown when the browser blocks autoplay. */
+.ari-tap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  height: 100%;
+  border: none;
+  cursor: pointer;
+  color: var(--ari-fg);
+  font: inherit;
+  background: radial-gradient(circle at center, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0.72));
+}
+
+.ari-tap[hidden] { display: none; }
+.ari-tap-icon { font-size: 2.4rem; line-height: 1; }
+.ari-tap-label { font-size: 0.95rem; letter-spacing: 0.03em; }
+
+/* iOS ignores programmatic volume changes, so the slider is hidden there. */
+.ari-ios .ari-volume { display: none; }
+
 .ari-overlay {
   position: absolute;
   inset: 0;
@@ -63,6 +88,7 @@ html, body {
   font-size: 0.78rem;
   letter-spacing: 0.02em;
   background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
 }
 
