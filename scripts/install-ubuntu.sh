@@ -188,6 +188,8 @@ EOF
   fi
   echo "    API key      : ${api_key}"
   echo "    token secret : ${token_secret}$([ "${ARI_ENABLE_TOKEN}" = "1" ] || echo '  (tokenization disabled)')"
+
+  RESOLVED_PUBLIC_URL="${public_url}"
 }
 
 install_service() {
@@ -235,9 +237,12 @@ verify() {
   for _ in $(seq 1 20); do
     if curl -fsS --max-time 2 "http://127.0.0.1:${ARI_HTTP_PORT}/healthz" >/dev/null 2>&1; then
       log "Ari Media Engine is running"
-      echo "    Dashboard: ${ARI_PUBLIC_URL:-http://127.0.0.1:${ARI_HTTP_PORT}}/"
+      echo "    Dashboard: ${RESOLVED_PUBLIC_URL:-http://127.0.0.1:${ARI_HTTP_PORT}}/"
       echo "    Health   : http://127.0.0.1:${ARI_HTTP_PORT}/healthz"
       echo "    Logs     : journalctl -u ari -f"
+      if [ -n "${ARI_DOMAIN:-}" ]; then
+        warn "public URL uses https://${ARI_DOMAIN}: put nginx (or another TLS proxy) in front of 127.0.0.1:${ARI_HTTP_PORT} - see docs/deployment.md"
+      fi
       return 0
     fi
     sleep 1
