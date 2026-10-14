@@ -18,6 +18,7 @@ import (
 
 	"github.com/johndesu090/ari-media-engine/internal/api"
 	"github.com/johndesu090/ari-media-engine/internal/audio"
+	"github.com/johndesu090/ari-media-engine/internal/auth"
 	"github.com/johndesu090/ari-media-engine/internal/broadcast"
 	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
@@ -84,6 +85,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	store := broadcast.NewMemoryStore()
 	policy := delivery.NewDomainPolicy(cfg.Security.AllowedDomains, cfg.Security.AllowAllEmbed)
 	signer := delivery.NewTokenSigner(cfg.Token.Enabled, cfg.Token.Secret, time.Duration(cfg.Token.TTL)*time.Second)
+	sessions := auth.NewStore(time.Duration(cfg.Auth.SessionTTL) * time.Second)
 
 	deliveryOf := func(streamID string) broadcast.Delivery {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -304,6 +306,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		Logger:     log,
 		Webhooks:   webhooks,
 		Auth:       cfg.Auth,
+		Sessions:   sessions,
 		StartedAt:  time.Now().UTC(),
 		Transcodes: transcodes,
 		Recordings: objectStore,

@@ -124,11 +124,14 @@ type HLSConfig struct {
 	OutputDir    string `yaml:"output_dir"`
 }
 
-// AuthConfig controls API authentication.
+// AuthConfig controls API authentication and the dashboard login.
 type AuthConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	JWTSecret string `yaml:"jwt_secret"`
-	APIKey    string `yaml:"api_key"`
+	Enabled    bool   `yaml:"enabled"`
+	JWTSecret  string `yaml:"jwt_secret"`
+	APIKey     string `yaml:"api_key"`
+	Username   string `yaml:"username"`
+	Password   string `yaml:"password"`
+	SessionTTL int    `yaml:"session_ttl_sec"`
 }
 
 // SecurityConfig controls iframe embedding restrictions. When AllowAllEmbed is
@@ -224,7 +227,7 @@ func Default() Config {
 			PlaylistSize: 6,
 			OutputDir:    "./data/hls",
 		},
-		Auth: AuthConfig{Enabled: false},
+		Auth: AuthConfig{Enabled: false, SessionTTL: 43200},
 		Security: SecurityConfig{
 			AllowAllEmbed: false,
 			EnforceOrigin: true,
@@ -313,6 +316,9 @@ func applyEnv(cfg *Config) {
 	setBool(&cfg.Auth.Enabled, "ARI_AUTH_ENABLED")
 	setString(&cfg.Auth.JWTSecret, "ARI_JWT_SECRET")
 	setString(&cfg.Auth.APIKey, "ARI_API_KEY")
+	setString(&cfg.Auth.Username, "ARI_AUTH_USERNAME")
+	setString(&cfg.Auth.Password, "ARI_AUTH_PASSWORD")
+	setInt(&cfg.Auth.SessionTTL, "ARI_AUTH_SESSION_TTL_SEC")
 	setBool(&cfg.Security.AllowAllEmbed, "ARI_SECURITY_ALLOW_ALL_EMBED")
 	setStringSlice(&cfg.Security.AllowedDomains, "ARI_SECURITY_ALLOWED_DOMAINS")
 	setBool(&cfg.Security.EnforceOrigin, "ARI_SECURITY_ENFORCE_ORIGIN")
@@ -392,8 +398,11 @@ func (c Config) Validate() error {
 	if c.Storage.Driver != "local" && c.Storage.Driver != "s3" {
 		return fmt.Errorf("config: storage.driver %q unsupported (want local or s3)", c.Storage.Driver)
 	}
-	if c.Auth.Enabled && c.Auth.JWTSecret == "" && c.Auth.APIKey == "" {
-		return fmt.Errorf("config: auth.enabled requires jwt_secret or api_key")
+	if c.Auth.Enabled && c.Auth.JWTSecret == "" && c.Auth.APIKey == "" && c.Auth.Username == "" {
+		return fmt.Errorf("config: auth.enabled requires api_key, jwt_secret or username/password")
+	}
+	if c.Auth.Username != "" && c.Auth.Password == "" {
+		return fmt.Errorf("config: auth.username requires auth.password")
 	}
 	if c.Player.WSPath == "" || !strings.HasPrefix(c.Player.WSPath, "/") {
 		return fmt.Errorf("config: player.ws_path %q must start with /", c.Player.WSPath)

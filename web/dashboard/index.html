@@ -47,6 +47,7 @@
     <span class="badge" id="health">checking…</span>
     <span style="flex:1"></span>
     <button class="ghost" onclick="loadAll()">Refresh</button>
+    <button class="ghost" id="logout-btn" onclick="logout()" hidden>Sign out</button>
   </header>
 
   <main>
@@ -169,13 +170,33 @@
     }
 
     async function api(path, opts) {
-      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+      const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" }, credentials: "same-origin" }, opts));
+      if (res.status === 401) { location.href = "/login.html"; throw new Error("authentication required"); }
       if (res.status === 204) return null;
       const text = await res.text();
       let body = null;
       try { body = text ? JSON.parse(text) : null; } catch (e) { body = text; }
       if (!res.ok) throw new Error((body && body.message) || res.statusText);
       return body;
+    }
+
+    async function ensureAuth() {
+      try {
+        const s = await api("/api/v1/session");
+        if (s.authRequired) {
+          const btn = document.getElementById("logout-btn");
+          if (btn) { btn.hidden = false; }
+          if (!s.authenticated) { location.href = "/login.html"; return false; }
+        }
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    async function logout() {
+      try { await api("/api/v1/logout", { method: "POST" }); } catch (e) { /* ignore */ }
+      location.href = "/login.html";
     }
 
     function fmtUptime(sec) {
@@ -408,8 +429,11 @@
       '2. Publish via WebRTC or RTMP (rtmp://' + location.hostname + ':1935/live/<streamId>).\n' +
       '3. Embed: ' + base + '/player.html?id=<streamId>';
 
-    loadAll();
-    setInterval(() => { loadStats(); loadStreams(); }, 5000);
+    ensureAuth().then((ok) => {
+      if (!ok) return;
+      loadAll();
+      setInterval(() => { loadStats(); loadStreams(); }, 5000);
+    });
   </script>
 </body>
 </html>

@@ -18,7 +18,9 @@
 #   ARI_ICE_TCP_PORT   ICE-TCP port (default 7881)
 #   ARI_ICE_UDP_MIN    ICE UDP range start (default 50000)
 #   ARI_ICE_UDP_MAX    ICE UDP range end (default 50100)
-#   ARI_ENABLE_AUTH    1 to require an API key (default 0)
+#   ARI_ENABLE_AUTH    1 to require dashboard login (default 1)
+#   ARI_ADMIN_USER     dashboard username (default admin)
+#   ARI_ADMIN_PASSWORD dashboard password (generated when empty)
 #   ARI_ENABLE_TOKEN   1 to tokenize HLS/DASH (default 0)
 #   ARI_ENABLE_CLUSTER 1 to enable Redis clustering (default 0)
 #   ARI_REPO_URL       Git URL (default the GitHub repo)
@@ -36,9 +38,11 @@ ARI_SRT_PORT="${ARI_SRT_PORT:-8890}"
 ARI_ICE_TCP_PORT="${ARI_ICE_TCP_PORT:-7881}"
 ARI_ICE_UDP_MIN="${ARI_ICE_UDP_MIN:-50000}"
 ARI_ICE_UDP_MAX="${ARI_ICE_UDP_MAX:-50100}"
-ARI_ENABLE_AUTH="${ARI_ENABLE_AUTH:-0}"
+ARI_ENABLE_AUTH="${ARI_ENABLE_AUTH:-1}"
 ARI_ENABLE_TOKEN="${ARI_ENABLE_TOKEN:-0}"
 ARI_ENABLE_CLUSTER="${ARI_ENABLE_CLUSTER:-0}"
+ARI_ADMIN_USER="${ARI_ADMIN_USER:-admin}"
+ARI_ADMIN_PASSWORD="${ARI_ADMIN_PASSWORD:-}"
 ARI_GO_VERSION="${ARI_GO_VERSION:-1.26.0}"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -129,7 +133,7 @@ create_user_and_dirs() {
 }
 
 write_config() {
-  local public_ip public_url api_key token_secret
+  local public_ip public_url api_key token_secret admin_password
   public_ip="$(detect_public_ip)"
   public_url="${ARI_PUBLIC_URL:-http://${public_ip}:${ARI_HTTP_PORT}}"
   if [ -n "${ARI_DOMAIN:-}" ]; then
@@ -137,6 +141,7 @@ write_config() {
   fi
   api_key="$(rand_hex)"
   token_secret="$(rand_hex)"
+  admin_password="${ARI_ADMIN_PASSWORD:-$(rand_hex)}"
 
   log "Writing /etc/ari/config.yaml"
   cp "${ARI_INSTALL_DIR}/src/configs/config.yaml" /etc/ari/config.yaml
@@ -162,6 +167,8 @@ ARI_STORAGE_LOCAL_ROOT=/var/lib/ari/recordings
 ARI_RECORDING_WORK_DIR=/var/lib/ari/recordings
 ARI_TRANSCODE_OUTPUT_DIR=/var/lib/ari/hls
 ARI_AUTH_ENABLED=${ARI_ENABLE_AUTH}
+ARI_AUTH_USERNAME=${ARI_ADMIN_USER}
+ARI_AUTH_PASSWORD=${admin_password}
 ARI_API_KEY=${api_key}
 ARI_TOKEN_ENABLED=${ARI_ENABLE_TOKEN}
 ARI_TOKEN_SECRET=${token_secret}
@@ -174,7 +181,12 @@ EOF
   log "Configuration summary"
   echo "    public URL   : ${public_url}"
   echo "    ICE public IP: ${public_ip}"
-  echo "    API key      : ${api_key}$([ "${ARI_ENABLE_AUTH}" = "1" ] || echo '  (auth disabled)')"
+  if [ "${ARI_ENABLE_AUTH}" = "1" ]; then
+    echo "    dashboard    : ${ARI_ADMIN_USER} / ${admin_password}"
+  else
+    echo "    dashboard    : authentication disabled"
+  fi
+  echo "    API key      : ${api_key}"
   echo "    token secret : ${token_secret}$([ "${ARI_ENABLE_TOKEN}" = "1" ] || echo '  (tokenization disabled)')"
 }
 

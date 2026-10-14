@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Ari Media Engine · Sign in</title>
+  <style>
+    :root { --bg:#0b0d10; --panel:#151a21; --line:#232b36; --fg:#e8edf4; --muted:#94a3b8; --accent:#38bdf8; --err:#ef4444; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: radial-gradient(circle at 50% 0%, #101722, var(--bg) 60%);
+      color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    form {
+      width: min(360px, 92vw); background: var(--panel); border: 1px solid var(--line);
+      border-radius: 0.9rem; padding: 1.6rem 1.5rem; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+    }
+    h1 { font-size: 1.15rem; margin: 0 0 .2rem; }
+    .sub { color: var(--muted); font-size: .82rem; margin: 0 0 1.1rem; }
+    label { display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: .7rem 0 .3rem; }
+    input {
+      width: 100%; background: #0e1319; border: 1px solid var(--line); color: var(--fg);
+      border-radius: .5rem; padding: .6rem .7rem; font: inherit;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    button {
+      width: 100%; margin-top: 1.1rem; background: var(--accent); color: #04121b; border: none;
+      border-radius: .5rem; padding: .65rem; font: inherit; font-weight: 700; cursor: pointer;
+    }
+    button:hover { filter: brightness(1.05); }
+    .error { color: var(--err); font-size: .82rem; margin: .8rem 0 0; }
+    .foot { color: var(--muted); font-size: .72rem; text-align: center; margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <form id="login-form">
+    <h1>Ari Media Engine</h1>
+    <p class="sub">Sign in to the management console</p>
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" autofocus>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    <p id="error" class="error" hidden></p>
+    <p class="foot">Credentials are configured via <code>auth.username</code> / <code>auth.password</code>.</p>
+  </form>
+
+  <script>
+    var form = document.getElementById("login-form");
+    var errEl = document.getElementById("error");
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      errEl.hidden = true;
+      var body = {
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value
+      };
+      fetch("/api/v1/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body)
+      }).then(function (res) {
+        if (res.ok) { location.href = "/"; return null; }
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          errEl.textContent = data.message || "Sign-in failed";
+          errEl.hidden = false;
+        });
+      }).catch(function () {
+        errEl.textContent = "Network error";
+        errEl.hidden = false;
+      });
+    });
+
+    // If authentication is disabled, skip straight to the console.
+    fetch("/api/v1/session", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) { if (!s.authRequired) { location.href = "/"; } })
+      .catch(function () {});
+  </script>
+</body>
+</html>

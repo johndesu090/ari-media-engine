@@ -4,8 +4,9 @@
 #
 #   ./scripts/deploy-docker.sh
 #
-# Builds the image and (re)starts a container. Host networking is used by default
-# so WebRTC UDP works without a large port map.
+# It builds the image (cloning the repository first when run outside a checkout,
+# e.g. via `curl ... | bash`) and (re)starts a container. Host networking is used
+# by default so WebRTC UDP works without a large port map.
 #
 # Optional environment variables:
 #   ARI_PUBLIC_URL     Public base URL (default http://<public-ip>:<port>)
@@ -13,16 +14,24 @@
 #   ARI_HTTP_PORT      HTTP/API port (default 8080)
 #   ARI_ICE_UDP_MIN    ICE UDP range start (default 50000)
 #   ARI_ICE_UDP_MAX    ICE UDP range end (default 50100)
-#   ARI_ENABLE_AUTH    1 to require an API key (default 0)
+#   ARI_ENABLE_AUTH    1 to require dashboard login (default 1)
+#   ARI_ADMIN_USER     dashboard username (default admin)
+#   ARI_ADMIN_PASSWORD dashboard password (generated when empty)
 #   ARI_ENABLE_TOKEN   1 to tokenize HLS/DASH (default 0)
 #   ARI_IMAGE          Image tag (default ari-media-engine:latest)
 #   ARI_CONTAINER      Container name (default ari)
 #   ARI_NETWORK        host | bridge (default host)
 #   ARI_DATA_DIR       Host data directory (default ./data)
 #   ARI_SKIP_BUILD     1 to reuse the existing image (default 0)
+#   ARI_REPO_URL       Git URL (default the GitHub repo)
+#   ARI_REF            Git ref/branch to build (default main)
+#   ARI_BUILD_DIR      Checkout location when cloning (default ~/ari-media-engine)
 #
 set -euo pipefail
 
+ARI_REPO_URL="${ARI_REPO_URL:-https://github.com/johndesu090/ari-media-engine.git}"
+ARI_REF="${ARI_REF:-main}"
+ARI_BUILD_DIR="${ARI_BUILD_DIR:-$HOME/ari-media-engine}"
 ARI_IMAGE="${ARI_IMAGE:-ari-media-engine:latest}"
 ARI_CONTAINER="${ARI_CONTAINER:-ari}"
 ARI_NETWORK="${ARI_NETWORK:-host}"
@@ -32,8 +41,10 @@ ARI_SRT_PORT="${ARI_SRT_PORT:-8890}"
 ARI_ICE_TCP_PORT="${ARI_ICE_TCP_PORT:-7881}"
 ARI_ICE_UDP_MIN="${ARI_ICE_UDP_MIN:-50000}"
 ARI_ICE_UDP_MAX="${ARI_ICE_UDP_MAX:-50100}"
-ARI_ENABLE_AUTH="${ARI_ENABLE_AUTH:-0}"
+ARI_ENABLE_AUTH="${ARI_ENABLE_AUTH:-1}"
 ARI_ENABLE_TOKEN="${ARI_ENABLE_TOKEN:-0}"
+ARI_ADMIN_USER="${ARI_ADMIN_USER:-admin}"
+ARI_ADMIN_PASSWORD="${ARI_ADMIN_PASSWORD:-}"
 ARI_DATA_DIR="${ARI_DATA_DIR:-$(pwd)/data}"
 ARI_SKIP_BUILD="${ARI_SKIP_BUILD:-0}"
 
@@ -59,14 +70,36 @@ rand_hex() {
   fi
 }
 
+# resolve_repo prints the directory containing the Dockerfile, cloning the
+# repository when the script is run outside a checkout.
+resolve_repo() {
+  if [ -f ./Dockerfile ] && [ -f ./go.mod ]; then
+    pwd
+    return
+  fi
+  command -v git >/dev/null 2>&1 || die "git is required to fetch the source"
+  if [ -d "${ARI_BUILD_DIR}/.git" ]; then
+    log "Updating source in ${ARI_BUILD_DIR}"
+    git -C "${ARI_BUILD_DIR}" fetch --all --prune
+    git -C "${ARI_BUILD_DIR}" checkout "${ARI_REF}"
+    git -C "${ARI_BUILD_DIR}" pull --ff-only || true
+  else
+    log "Cloning ${ARI_REPO_URL} into ${ARI_BUILD_DIR}"
+    git clone --branch "${ARI_REF}" "${ARI_REPO_URL}" "${ARI_BUILD_DIR}"
+  fi
+  echo "${ARI_BUILD_DIR}"
+}
+
 PUBLIC_IP="$(detect_public_ip)"
 PUBLIC_URL="${ARI_PUBLIC_URL:-http://${PUBLIC_IP}:${ARI_HTTP_PORT}}"
 API_KEY="$(rand_hex)"
 TOKEN_SECRET="$(rand_hex)"
+ADMIN_PASSWORD="${ARI_ADMIN_PASSWORD:-$(rand_hex)}"
+REPO_DIR="$(resolve_repo)"
 
 if [ "${ARI_SKIP_BUILD}" != "1" ]; then
-  log "Building image ${ARI_IMAGE}"
-  docker build -t "${ARI_IMAGE}" .
+  log "Building image ${ARI_IMAGE} from ${REPO_DIR}"
+  docker build -t "${ARI_IMAGE}" "${REPO_DIR}"
 fi
 
 log "Recreating container ${ARI_CONTAINER}"
@@ -81,6 +114,8 @@ ENV_ARGS=(
   -e "ARI_ICE_UDP_PORT_MIN=${ARI_ICE_UDP_MIN}"
   -e "ARI_ICE_UDP_PORT_MAX=${ARI_ICE_UDP_MAX}"
   -e "ARI_AUTH_ENABLED=${ARI_ENABLE_AUTH}"
+  -e "ARI_AUTH_USERNAME=${ARI_ADMIN_USER}"
+  -e "ARI_AUTH_PASSWORD=${ADMIN_PASSWORD}"
   -e "ARI_API_KEY=${API_KEY}"
   -e "ARI_TOKEN_ENABLED=${ARI_ENABLE_TOKEN}"
   -e "ARI_TOKEN_SECRET=${TOKEN_SECRET}"
@@ -113,8 +148,13 @@ for _ in $(seq 1 20); do
   if curl -fsS --max-time 2 "http://127.0.0.1:${ARI_HTTP_PORT}/healthz" >/dev/null 2>&1; then
     log "Ari Media Engine is running"
     echo "    Dashboard: ${PUBLIC_URL}/"
+    if [ "${ARI_ENABLE_AUTH}" = "1" ]; then
+      echo "    Login    : ${ARI_ADMIN_USER} / ${ADMIN_PASSWORD}"
+    else
+      echo "    Login    : authentication disabled"
+    fi
+    echo "    API key  : ${API_KEY}"
     echo "    Logs     : docker logs -f ${ARI_CONTAINER}"
-    echo "    API key  : ${API_KEY}$([ "${ARI_ENABLE_AUTH}" = "1" ] || echo '  (auth disabled)')"
     exit 0
   fi
   sleep 1

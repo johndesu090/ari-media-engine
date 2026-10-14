@@ -35,6 +35,52 @@ mirrors and extends the core enterprise features of Ant Media Server.
 
 ---
 
+## One-command deployment
+
+Deploy the whole stack from a single command that starts with `git clone`.
+
+### Ubuntu 24.04 (bare metal, systemd)
+
+```bash
+git clone https://github.com/johndesu090/ari-media-engine.git && \
+cd ari-media-engine && \
+sudo ./scripts/install-ubuntu.sh
+```
+
+Installs `ffmpeg` + the Go toolchain, builds the engine, creates the `ari`
+service user, writes `/etc/ari/{config.yaml,ari.env}`, installs and starts a
+systemd unit, opens the firewall, and prints the dashboard login. Configure it
+with environment variables:
+
+```bash
+sudo ARI_DOMAIN=media.example.com ARI_ADMIN_PASSWORD='change-me' ./scripts/install-ubuntu.sh
+```
+
+### Docker (image + container)
+
+```bash
+git clone https://github.com/johndesu090/ari-media-engine.git && \
+cd ari-media-engine && \
+./scripts/deploy-docker.sh
+```
+
+Builds the image and starts a container with host networking, then prints the
+dashboard login. Configure it with environment variables:
+
+```bash
+ARI_PUBLIC_IP=203.0.113.10 ARI_ENABLE_TOKEN=1 ./scripts/deploy-docker.sh
+```
+
+> Both scripts also work without a manual checkout:
+> `curl -fsSL https://raw.githubusercontent.com/johndesu090/ari-media-engine/main/scripts/install-ubuntu.sh | sudo bash`
+> and the same for `deploy-docker.sh` (it clones the repo itself).
+
+The dashboard requires a login when authentication is enabled (the deploy
+scripts enable it and generate an `admin` password). Full manual steps — nginx
+TLS, Redis, MinIO/S3, Compose — are in **[`docs/deployment.md`](docs/deployment.md)**.
+
+---
+
 ## Quickstart with Docker Compose
 
 The compose stack starts the engine alongside Redis (clustering state) and MinIO
@@ -462,34 +508,22 @@ docs/                  Architecture and deployment documentation
 .github/workflows/     CI (build, vet, test, docker build)
 ```
 
-## Deployment
+## Dashboard login
 
-Ready to run it for real? See **[`docs/deployment.md`](docs/deployment.md)**.
+When `auth.enabled` is set, the management console at `/` requires a login.
+Sign in at `/login.html` with `auth.username` / `auth.password` (or, if no
+username is configured, username `admin` and the API key as the password). A
+successful login sets an HttpOnly session cookie; the REST API also accepts an
+`X-API-Key` header for programmatic access.
 
-One-command deployment:
-
-```bash
-# Ubuntu 24.04 (build + systemd + firewall)
-sudo ./scripts/install-ubuntu.sh
-
-# Docker (build image + run container)
-./scripts/deploy-docker.sh
+```yaml
+auth:
+  enabled: true
+  username: admin
+  password: change-me
+  api_key: change-me-too      # also usable as a bearer/API key
+  session_ttl_sec: 43200
 ```
-
-Both are configurable with environment variables (public IP/domain, ports,
-auth, tokenization). The guide also covers the manual Ubuntu 24.04 steps
-(systemd, ufw, nginx TLS, Redis) and the Docker Compose stack with Redis and
-MinIO.
-
-Quick start with Compose:
-
-```bash
-git clone https://github.com/johndesu090/ari-media-engine.git
-cd ari-media-engine
-docker compose up -d --build
-```
-
-Then open <http://localhost:8080/>.
 
 ## Development
 

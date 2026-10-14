@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/johndesu090/ari-media-engine/internal/auth"
 	"github.com/johndesu090/ari-media-engine/internal/broadcast"
 	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
@@ -32,6 +34,7 @@ type Options struct {
 	Logger       *slog.Logger
 	Webhooks     *webhook.Dispatcher
 	Auth         config.AuthConfig
+	Sessions     *auth.Store
 	StartedAt    time.Time
 	Transcodes   func() int
 	HLSBase      string
@@ -52,6 +55,7 @@ type Server struct {
 	log          *slog.Logger
 	webhooks     *webhook.Dispatcher
 	auth         config.AuthConfig
+	sessions     *auth.Store
 	startedAt    time.Time
 	transcodes   func() int
 	hlsBase      string
@@ -81,6 +85,7 @@ func New(opts Options) *Server {
 		log:          log,
 		webhooks:     opts.Webhooks,
 		auth:         opts.Auth,
+		sessions:     opts.Sessions,
 		startedAt:    startedAt,
 		transcodes:   opts.Transcodes,
 		hlsBase:      opts.HLSBase,
@@ -107,6 +112,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	protect := func(h http.HandlerFunc) http.Handler { return s.requireAuth(h) }
 
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("POST /api/v1/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/v1/session", s.handleSession)
 	mux.Handle("GET /api/v1/stats", protect(s.handleStats))
 	mux.Handle("GET /api/v1/cluster/nodes", protect(s.handleClusterNodes))
 	mux.Handle("GET /api/v1/recordings", protect(s.handleListRecordings))
@@ -133,9 +141,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("PUT /api/v1/security/token", protect(s.handlePutTokenConfig))
 }
 
-// requireAuth enforces the configured API key on control-plane routes.
+// sessionCookie is the dashboard session cookie name.
+const sessionCookie = "ari_session"
+
+// requireAuth enforces authentication on control-plane routes. A request is
+// authorised by a matching API key (programmatic access) or a valid dashboard
+// session cookie (browser login).
 func (s *Server) requireAuth(next http.Handler) http.Handler {
-	if !s.auth.Enabled || s.auth.APIKey == "" {
+	if !s.auth.Enabled {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -143,18 +156,117 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		key := r.Header.Get("X-API-Key")
-		if key == "" {
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-				key = strings.TrimPrefix(auth, "Bearer ")
-			}
-		}
-		if key != s.auth.APIKey {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "a valid API key is required")
+		if s.auth.APIKey != "" && apiKeyFrom(r) == s.auth.APIKey {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		if c, err := r.Cookie(sessionCookie); err == nil && s.sessions.Valid(c.Value) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, "unauthorized", "authentication required")
 	})
+}
+
+func apiKeyFrom(r *http.Request) string {
+	if key := r.Header.Get("X-API-Key"); key != "" {
+		return key
+	}
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	return ""
+}
+
+// handleLogin authenticates a dashboard user and sets a session cookie.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.Enabled {
+		writeJSON(w, http.StatusOK, map[string]any{"authRequired": false, "authenticated": true})
+		return
+	}
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if !s.checkCredentials(req.Username, req.Password) {
+		writeError(w, http.StatusUnauthorized, "invalid_credentials", "invalid username or password")
+		return
+	}
+	token := s.sessions.Create()
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(r),
+		MaxAge:   int(s.sessions.TTL().Seconds()),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": req.Username})
+}
+
+// handleLogout clears the dashboard session.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		s.sessions.Delete(c.Value)
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   isSecure(r),
+		MaxAge:   -1,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSession reports whether the caller is authenticated, for the dashboard.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if !s.auth.Enabled {
+		writeJSON(w, http.StatusOK, map[string]any{"authRequired": false, "authenticated": true})
+		return
+	}
+	authenticated := false
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		authenticated = s.sessions.Valid(c.Value)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authRequired":  true,
+		"authenticated": authenticated,
+		"username":      s.auth.Username,
+	})
+}
+
+// checkCredentials validates the login. When no username is configured, the API
+// key doubles as the password with username "admin".
+func (s *Server) checkCredentials(user, pass string) bool {
+	expectedUser := s.auth.Username
+	if expectedUser == "" {
+		expectedUser = "admin"
+	}
+	expectedPass := s.auth.Password
+	if expectedPass == "" {
+		expectedPass = s.auth.APIKey
+	}
+	if expectedPass == "" {
+		return false
+	}
+	userOK := subtle.ConstantTimeCompare([]byte(user), []byte(expectedUser)) == 1
+	passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(expectedPass)) == 1
+	return userOK && passOK
+}
+
+func isSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 /* ------------------------------- health/stats ------------------------------ */

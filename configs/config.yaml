@@ -67,6 +67,11 @@ auth:
   enabled: false
   jwt_secret: ""
   api_key: ""
+  # Dashboard login (active when enabled). If username is empty the API key acts
+  # as the password with username "admin".
+  username: ""
+  password: ""
+  session_ttl_sec: 43200
 
 # Iframe embedding security. When allow_all_embed is false, only the domains
 # listed here (globally) or per stream may frame a stream. A leading "*." matches
