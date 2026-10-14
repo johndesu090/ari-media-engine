@@ -83,6 +83,8 @@ player:
   low_latency_default: true
   # Optional dash.js build loaded for DASH playback (CDN or self-hosted).
   dash_js_url: ""
+  # Optional hls.js build loaded for HLS playback (CDN or self-hosted).
+  hls_js_url: ""
 
 webhooks:
   enabled: false
@@ -132,3 +134,11 @@ recording:
   enabled: false
   auto_record: true
   work_dir: ./data/recordings
+
+# Peer-assisted delivery (SwarmCloud-style). Viewers of a stream form a WebRTC
+# data-channel mesh via the tracker at ws_path and share HLS/DASH segments,
+# falling back to the origin. Toggleable at runtime from the dashboard/API.
+p2p:
+  enabled: false
+  ws_path: /p2p/ws
+  max_peers: 4

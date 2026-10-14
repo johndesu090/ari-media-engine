@@ -59,6 +59,7 @@
           <div class="stat"><div class="num" id="s-viewers">–</div><div class="label">Viewers</div></div>
           <div class="stat"><div class="num" id="s-uptime">–</div><div class="label">Uptime</div></div>
           <div class="stat"><div class="num" id="s-recording">–</div><div class="label">Recording</div></div>
+          <div class="stat"><div class="num" id="s-p2ppeers">–</div><div class="label">P2P peers</div></div>
         </div>
       </div>
 
@@ -133,6 +134,20 @@
       </div>
 
       <div class="panel">
+        <h2>Peer-to-peer delivery</h2>
+        <label class="muted" style="display:flex; align-items:center; gap:.5rem; margin-bottom:.6rem;">
+          <input type="checkbox" id="p2p-enabled" style="flex:0"> Enable P2P sharing for HLS / DASH
+        </label>
+        <div style="display:flex; gap:.5rem;">
+          <button onclick="saveP2P()">Save</button>
+          <button class="ghost" onclick="loadP2P()">Reset</button>
+        </div>
+        <p class="muted" style="margin-top:.7rem;">Viewers share segments over WebRTC data channels via the
+          tracker at <code>/p2p/ws</code>, falling back to the origin. Connected peers:
+          <span id="p2p-count">0</span>.</p>
+      </div>
+
+      <div class="panel">
         <h2>Quick start</h2>
         <p class="muted">Publish from a browser or OBS, then embed the player anywhere on an allow-listed domain.</p>
         <div class="snippet" id="quickstart">Loading…</div>
@@ -184,6 +199,7 @@
         $("s-viewers").textContent = s.viewers;
         $("s-uptime").textContent = fmtUptime(s.uptimeSeconds);
         $("s-recording").textContent = s.recording || 0;
+        $("s-p2ppeers").textContent = s.p2pPeers || 0;
       } catch (e) { toast("stats: " + e.message); }
     }
 
@@ -368,7 +384,23 @@
       } catch (e) { toast("delete: " + e.message); }
     }
 
-    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadRecordings(); loadDomains(); loadTokenConfig(); }
+    async function loadP2P() {
+      try {
+        const p = await api("/api/v1/p2p");
+        $("p2p-enabled").checked = !!p.enabled;
+        $("p2p-count").textContent = p.peers || 0;
+      } catch (e) { toast("p2p: " + e.message); }
+    }
+
+    async function saveP2P() {
+      try {
+        await api("/api/v1/p2p", { method: "PUT", body: JSON.stringify({ enabled: $("p2p-enabled").checked }) });
+        toast("P2P settings saved");
+        loadP2P();
+      } catch (e) { toast("p2p: " + e.message); }
+    }
+
+    function loadAll() { loadHealth(); loadStats(); loadStreams(); loadRecordings(); loadDomains(); loadTokenConfig(); loadP2P(); }
 
     $("create-form").addEventListener("submit", createStream);
     $("quickstart").textContent =

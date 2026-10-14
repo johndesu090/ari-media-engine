@@ -40,6 +40,15 @@
     statusText.textContent = text;
   }
 
+  // Peer-assisted delivery (HLS/DASH segments shared over WebRTC data channels).
+  var p2p = null;
+  if (cfg.p2p && cfg.p2p.enabled && window.AriP2P) {
+    try {
+      p2p = window.AriP2P.create({ channel: cfg.streamId, wsPath: cfg.p2p.wsPath });
+      p2p.start();
+    } catch (e) { p2p = null; }
+  }
+
   function signalingURL() {
     var proto = location.protocol === "https:" ? "wss:" : "ws:";
     return proto + "//" + location.host + (cfg.wsPath || "/ws");
@@ -186,10 +195,12 @@
     if (!url) { nextFallback("no HLS source"); return; }
 
     if (window.Hls && window.Hls.isSupported()) {
-      var hls = new window.Hls({
+      var hlsConfig = {
         lowLatencyMode: state.lowLatency,
         liveSyncDurationCount: state.lowLatency ? 2 : 3
-      });
+      };
+      if (p2p) { hlsConfig.loader = p2p.hlsLoader(window.Hls); }
+      var hls = new window.Hls(hlsConfig);
       state.hls = hls;
       hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
         setStatus("live", "Live · HLS");
@@ -222,6 +233,7 @@
 
     if (window.dashjs && window.dashjs.MediaPlayer) {
       var player = window.dashjs.MediaPlayer().create();
+      if (p2p) { p2p.setupDash(player); }
       state.dash = player;
       player.initialize(video, url, true);
       player.on(window.dashjs.MediaPlayer.events.PLAYBACK_PLAYING, function () {

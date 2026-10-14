@@ -44,6 +44,7 @@ for the remaining enterprise features.
 | `internal/recorder`  | Records a stream's FLV and uploads it to storage |
 | `internal/storage`   | Object storage abstraction (local disk, S3/MinIO) |
 | `internal/flv`       | FLV container framing shared by transcode and recorder |
+| `internal/p2p`       | P2P tracker: peer channels, `have`/`want`, WebRTC signaling relay |
 | `internal/webhook`   | Asynchronous lifecycle webhook dispatcher |
 | `internal/server`    | Composition root: wires every subsystem into one HTTP server |
 | `pkg/id`, `pkg/logger` | Identifier generation and structured logging |
@@ -157,6 +158,24 @@ working copy is removed. Recordings are listed and deleted via
 Because the FLV fan-out feeds both the transcoder and the recorder, a single
 publish can be recorded and transcoded into HLS/DASH at the same time.
 
+## Peer-assisted delivery (P2P)
+
+`internal/p2p` is a tracker that groups viewers of a stream into a channel. It
+never sees media: it records which segments each peer holds (`have`), answers
+`want` queries with candidate peers, and relays `signal` messages so peers can
+open RTCDataChannels between themselves. Peers are added with a TTL-free
+WebSocket session; a `peer-joined`/`peer-left` broadcast keeps the mesh aware of
+membership. The tracker is toggled at runtime via `/api/v1/p2p`.
+
+The client engine (`web/p2p/p2p.js`, served at `/p2p/p2p.js`) connects to the
+tracker, forms a small mesh (the newcomer initiates offers to the peers it is
+given), and transfers segments over data channels using a compact binary
+framing (request / response header / 16 KiB chunks / miss / have). Segments
+acquired from a peer or the origin are cached in memory and announced to the
+mesh. The engine exposes `hlsLoader(Hls)` (a hls.js loader class) and
+`setupDash(player)` (a best-effort dash.js `XHRLoader` override); manifests and
+keys always go to the origin. A `fetch` primitive provides CDN fallback.
+
 ## Embedding security
 
 Two independent layers enforce iframe restrictions:
@@ -225,4 +244,5 @@ path never needs to change.
 | Delivery modes + tokens | ✅ MVP | Per-stream webrtc/hls/dash/all; HMAC tokenization for HLS/DASH |
 | Redis clustering | ✅ MVP | Node registry + TTL heartbeats; cross-node stream routing pending |
 | Recording + S3 sync | ✅ MVP | Raw FLV recording uploaded to local/S3 storage on unpublish |
+| Peer-assisted delivery (P2P) | ✅ MVP | WebRTC data-channel mesh + tracker; hls.js/dash.js loaders with CDN fallback |
 | Trickle ICE / simulcast | ✅ MVP | Candidates relayed incrementally; SFU forwards the preferred RID layer |

@@ -5,6 +5,7 @@ mirrors and extends the core enterprise features of Ant Media Server.
 
 - **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery over trickle ICE.
 - **Simulcast:** accepts a publisher's RID layers and forwards the preferred layer to subscribers.
+- **Peer-assisted delivery (P2P):** HLS/DASH viewers share segments over WebRTC data channels, with CDN fallback.
 - **Multi-protocol ingest:** WebRTC publish, plus RTMP ingest (H.264) and SRT / RTSP listeners.
 - **Multi-protocol playback:** WebRTC first, with HLS / DASH fallback.
 - **Per-stream delivery modes:** WebRTC-only, HLS-only, DASH-only or all, switchable from the dashboard or API.
@@ -19,12 +20,13 @@ mirrors and extends the core enterprise features of Ant Media Server.
 > **Status:** Phase 1 MVP. The WebRTC SFU (with **trickle ICE** and
 > **simulcast**), signaling, REST control plane, embedding security, player,
 > dashboard, **RTMP ingest**, **ABR transcoding**, **per-stream delivery
-> modes**, **HLS/DASH tokenization**, **Redis clustering** and **recording to
-> local/S3 storage** are functional. RTMP publishes are demuxed (FLV → H.264)
-> and fanned out to WebRTC subscribers, optionally transcoded into an HLS/DASH
-> ABR ladder served at `/hls/<streamID>/index.m3u8` and
-> `/dash/<streamID>/manifest.mpd`, and optionally recorded. SRT/RTSP demuxing and
-> AAC→Opus audio transcoding remain scaffolded with clear extension points (see
+> modes**, **HLS/DASH tokenization**, **Redis clustering**, **recording to
+> local/S3 storage** and **peer-assisted (P2P) delivery** are functional. RTMP
+> publishes are demuxed (FLV → H.264) and fanned out to WebRTC subscribers,
+> optionally transcoded into an HLS/DASH ABR ladder served at
+> `/hls/<streamID>/index.m3u8` and `/dash/<streamID>/manifest.mpd`, and
+> optionally recorded. SRT/RTSP demuxing and AAC→Opus audio transcoding remain
+> scaffolded with clear extension points (see
 > [`docs/architecture.md`](docs/architecture.md)).
 
 ---
@@ -92,6 +94,10 @@ overrides. Highlights:
 | `token.secret`                       | `ARI_TOKEN_SECRET`                 | HMAC signing secret |
 | `token.ttl_sec`                      | `ARI_TOKEN_TTL_SEC`                | Token lifetime in seconds |
 | `player.dash_js_url`                 | `ARI_PLAYER_DASH_JS_URL`           | Optional dash.js build for DASH playback |
+| `player.hls_js_url`                  | `ARI_PLAYER_HLS_JS_URL`            | Optional hls.js build for HLS playback |
+| `p2p.enabled`                        | `ARI_P2P_ENABLED`                  | Enable peer-assisted delivery |
+| `p2p.ws_path`                        | `ARI_P2P_WS_PATH`                  | Tracker WebSocket path |
+| `p2p.max_peers`                      | `ARI_P2P_MAX_PEERS`                | Peers offered per join |
 | `auth.enabled` / `auth.api_key`      | `ARI_AUTH_ENABLED`/`ARI_API_KEY`   | API key protection for control-plane routes |
 | `cluster.enabled`                    | `ARI_CLUSTER_ENABLED`              | Join a Redis-backed cluster |
 | `cluster.redis_url`                  | `ARI_REDIS_URL`                    | Redis connection URL |
@@ -314,6 +320,39 @@ curl -X DELETE http://localhost:8080/api/v1/recordings/STREAM/FILE.flv
 
 With the `local` driver, recordings are served at `/recordings/<key>`.
 
+## Peer-assisted delivery (P2P)
+
+Enable P2P to let viewers of a stream share HLS/DASH segments with each other
+over WebRTC data channels, reducing origin/CDN load (SwarmCloud-style). The
+built-in player uses it automatically when enabled.
+
+```yaml
+p2p:
+  enabled: true
+  ws_path: /p2p/ws
+  max_peers: 4
+```
+
+How it works:
+
+- Viewers of a stream join a **channel** on the tracker at `/p2p/ws`.
+- The tracker returns a few existing peers; the newcomer opens WebRTC data
+  channels to them and they announce which segments they hold.
+- When a segment is needed, it is fetched from a peer that has it, otherwise
+  from the origin, and then announced to the mesh.
+- The player wires this into **hls.js** (via a custom `loader`) and **dash.js**
+  (by overriding its `XHRLoader`). Manifests and keys always come from the
+  origin.
+
+Toggle it at runtime from the dashboard or the API:
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/p2p -H 'Content-Type: application/json' -d '{"enabled":true}'
+```
+
+To use P2P for HLS in non-Safari browsers, set `player.hls_js_url` (and
+`player.dash_js_url` for DASH) so the player loads the corresponding library.
+
 ## REST API
 
 | Method | Path                                        | Description |
@@ -323,6 +362,8 @@ With the `local` driver, recordings are served at `/recordings/<key>`.
 | GET    | `/api/v1/cluster/nodes`                     | Cluster membership |
 | GET    | `/api/v1/recordings`                        | List recordings |
 | DELETE | `/api/v1/recordings/{key...}`               | Delete a recording |
+| GET    | `/api/v1/p2p`                               | P2P tracker status |
+| PUT    | `/api/v1/p2p`                               | Enable/disable P2P |
 | GET    | `/api/v1/streams`                           | List streams |
 | POST   | `/api/v1/streams`                           | Create a stream |
 | GET    | `/api/v1/streams/{id}`                      | Get a stream |
@@ -353,6 +394,8 @@ internal/player        Built-in HTML5 player + embedded assets
 internal/storage       Local / S3 object storage
 internal/recorder      FLV recording + upload to storage
 internal/flv           FLV container framing (shared)
+internal/p2p           P2P tracker: peer channels + WebRTC signaling relay
+web/p2p                Client P2P engine (hls.js/dash.js loaders)
 internal/cluster       Redis-backed node discovery + heartbeats
 internal/api           REST control plane, webhooks
 internal/dashboard     Management console (web/dashboard)

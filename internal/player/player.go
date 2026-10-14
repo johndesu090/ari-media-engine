@@ -40,6 +40,12 @@ type Config struct {
 	LowLatency bool
 	// DashJSURL optionally loads a dash.js build for DASH playback.
 	DashJSURL string
+	// HLSJSURL optionally loads an hls.js build for HLS playback.
+	HLSJSURL string
+	// P2PEnabled turns on the peer-assisted delivery engine.
+	P2PEnabled bool
+	// P2PWsPath is the tracker WebSocket path (e.g. /p2p/ws).
+	P2PWsPath string
 	// Signer mints playback tokens for HLS/DASH URLs when tokenization is on.
 	Signer *delivery.TokenSigner
 	// Delivery resolves the delivery mode for a stream id.
@@ -67,17 +73,25 @@ type viewData struct {
 	Title      string
 	AssetBase  string
 	DashJSURL  string
+	HLSJSURL   string
+	P2PEnabled bool
 	ConfigJSON template.JS
 }
 
 // playerConfig is serialized into the page for the JavaScript runtime.
 type playerConfig struct {
-	StreamID   string `json:"streamId"`
-	WSPath     string `json:"wsPath"`
-	HLSURL     string `json:"hlsUrl"`
-	DashURL    string `json:"dashUrl"`
-	Delivery   string `json:"delivery"`
-	LowLatency bool   `json:"lowLatency"`
+	StreamID   string    `json:"streamId"`
+	WSPath     string    `json:"wsPath"`
+	HLSURL     string    `json:"hlsUrl"`
+	DashURL    string    `json:"dashUrl"`
+	Delivery   string    `json:"delivery"`
+	LowLatency bool      `json:"lowLatency"`
+	P2P        p2pConfig `json:"p2p"`
+}
+
+type p2pConfig struct {
+	Enabled bool   `json:"enabled"`
+	WSPath  string `json:"wsPath"`
 }
 
 // ServePlayer renders /player.html?id=STREAM_ID.
@@ -101,6 +115,7 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 		WSPath:     h.cfg.WSPath,
 		Delivery:   string(mode),
 		LowLatency: h.cfg.LowLatency,
+		P2P:        p2pConfig{Enabled: h.cfg.P2PEnabled, WSPath: h.cfg.P2PWsPath},
 	}
 	if mode.UsesHLS() {
 		pc.HLSURL = h.mediaURL(h.cfg.HLSBase, streamID, "index.m3u8")
@@ -116,10 +131,12 @@ func (h *Handler) ServePlayer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := viewData{
-		StreamID:  streamID,
-		Title:     h.cfg.Title,
-		AssetBase: AssetPath,
-		DashJSURL: h.cfg.DashJSURL,
+		StreamID:   streamID,
+		Title:      h.cfg.Title,
+		AssetBase:  AssetPath,
+		DashJSURL:  h.cfg.DashJSURL,
+		HLSJSURL:   h.cfg.HLSJSURL,
+		P2PEnabled: h.cfg.P2PEnabled,
 		// Prevent a stream id containing "</script>" from breaking out.
 		ConfigJSON: template.JS(strings.ReplaceAll(string(raw), "</", `<\/`)),
 	}

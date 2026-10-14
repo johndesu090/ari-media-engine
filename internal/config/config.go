@@ -28,6 +28,14 @@ type Config struct {
 	Transcode TranscodeConfig `yaml:"transcode"`
 	Token     TokenConfig     `yaml:"token"`
 	Recording RecordingConfig `yaml:"recording"`
+	P2P       P2PConfig       `yaml:"p2p"`
+}
+
+// P2PConfig controls the peer-assisted delivery tracker.
+type P2PConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	WSPath   string `yaml:"ws_path"`
+	MaxPeers int    `yaml:"max_peers"`
 }
 
 // ServerConfig controls the HTTP management/API server.
@@ -133,6 +141,8 @@ type PlayerConfig struct {
 	LowLatency bool   `yaml:"low_latency_default"`
 	// DashJSURL optionally loads a dash.js build for DASH playback.
 	DashJSURL string `yaml:"dash_js_url"`
+	// HLSJSURL optionally loads an hls.js build for HLS playback.
+	HLSJSURL string `yaml:"hls_js_url"`
 }
 
 // TokenConfig controls signed playback tokens for HLS/DASH.
@@ -224,6 +234,11 @@ func Default() Config {
 			AutoRecord: true,
 			WorkDir:    "./data/recordings",
 		},
+		P2P: P2PConfig{
+			Enabled:  false,
+			WSPath:   "/p2p/ws",
+			MaxPeers: 4,
+		},
 		Transcode: TranscodeConfig{
 			Enabled:    false,
 			FFmpegPath: "ffmpeg",
@@ -294,6 +309,10 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Recording.WorkDir, "ARI_RECORDING_WORK_DIR")
 	setString(&cfg.Storage.PublicBase, "ARI_STORAGE_PUBLIC_BASE")
 	setBool(&cfg.Storage.S3UseSSL, "ARI_STORAGE_S3_USE_SSL")
+	setBool(&cfg.P2P.Enabled, "ARI_P2P_ENABLED")
+	setString(&cfg.P2P.WSPath, "ARI_P2P_WS_PATH")
+	setInt(&cfg.P2P.MaxPeers, "ARI_P2P_MAX_PEERS")
+	setString(&cfg.Player.HLSJSURL, "ARI_PLAYER_HLS_JS_URL")
 }
 
 func setStringSlice(dst *[]string, key string) {
@@ -367,6 +386,9 @@ func (c Config) Validate() error {
 	}
 	if c.Cluster.Enabled && c.Cluster.RedisURL == "" {
 		return fmt.Errorf("config: cluster.enabled requires cluster.redis_url")
+	}
+	if c.P2P.Enabled && c.P2P.WSPath == "" {
+		return fmt.Errorf("config: p2p.ws_path is required when p2p is enabled")
 	}
 	return nil
 }

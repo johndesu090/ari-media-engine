@@ -15,6 +15,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/cluster"
 	"github.com/johndesu090/ari-media-engine/internal/config"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
+	"github.com/johndesu090/ari-media-engine/internal/p2p"
 	"github.com/johndesu090/ari-media-engine/internal/storage"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
 	"github.com/johndesu090/ari-media-engine/internal/webrtc"
@@ -37,6 +38,7 @@ type Options struct {
 	Cluster      *cluster.Manager
 	Recordings   storage.Store
 	RecordActive func() int
+	P2P          *p2p.Hub
 }
 
 // Server exposes the REST API.
@@ -55,6 +57,7 @@ type Server struct {
 	cluster      *cluster.Manager
 	recordings   storage.Store
 	recordActive func() int
+	p2p          *p2p.Hub
 }
 
 // New constructs the API server.
@@ -82,6 +85,7 @@ func New(opts Options) *Server {
 		cluster:      opts.Cluster,
 		recordings:   opts.Recordings,
 		recordActive: opts.RecordActive,
+		p2p:          opts.P2P,
 	}
 }
 
@@ -103,6 +107,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/cluster/nodes", protect(s.handleClusterNodes))
 	mux.Handle("GET /api/v1/recordings", protect(s.handleListRecordings))
 	mux.Handle("DELETE /api/v1/recordings/{key...}", protect(s.handleDeleteRecording))
+	mux.Handle("GET /api/v1/p2p", protect(s.handleGetP2P))
+	mux.Handle("PUT /api/v1/p2p", protect(s.handlePutP2P))
 
 	mux.Handle("GET /api/v1/streams", protect(s.handleListStreams))
 	mux.Handle("POST /api/v1/streams", protect(s.handleCreateStream))
@@ -186,7 +192,46 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	if s.recordActive != nil {
 		payload["recording"] = s.recordActive()
 	}
+	if s.p2p != nil {
+		payload["p2pPeers"] = s.p2p.PeerCount()
+	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+// handleGetP2P reports the peer-assisted delivery tracker status.
+func (s *Server) handleGetP2P(w http.ResponseWriter, _ *http.Request) {
+	if s.p2p == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":  s.p2p.Enabled(),
+		"peers":    s.p2p.PeerCount(),
+		"maxPeers": s.p2p.MaxPeers(),
+	})
+}
+
+// handlePutP2P enables or disables peer-assisted delivery at runtime.
+func (s *Server) handlePutP2P(w http.ResponseWriter, r *http.Request) {
+	if s.p2p == nil {
+		writeError(w, http.StatusServiceUnavailable, "p2p_unavailable", "p2p is not configured")
+		return
+	}
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_body", err.Error())
+		return
+	}
+	if req.Enabled != nil {
+		s.p2p.SetEnabled(*req.Enabled)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":  s.p2p.Enabled(),
+		"peers":    s.p2p.PeerCount(),
+		"maxPeers": s.p2p.MaxPeers(),
+	})
 }
 
 // handleListRecordings lists stored recordings.

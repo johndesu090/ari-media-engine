@@ -35,7 +35,9 @@
   </div>
 
   <script id="ari-config" type="application/json">{{.ConfigJSON}}</script>
+  {{if .HLSJSURL}}<script src="{{.HLSJSURL}}"></script>{{end}}
   {{if .DashJSURL}}<script src="{{.DashJSURL}}"></script>{{end}}
+  {{if .P2PEnabled}}<script src="/p2p/p2p.js"></script>{{end}}
   <script src="{{.AssetBase}}/player.js"></script>
 </body>
 </html>

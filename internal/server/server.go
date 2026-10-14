@@ -20,6 +20,7 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
 	"github.com/johndesu090/ari-media-engine/internal/ingest"
 	"github.com/johndesu090/ari-media-engine/internal/ingest/rtmp"
+	"github.com/johndesu090/ari-media-engine/internal/p2p"
 	"github.com/johndesu090/ari-media-engine/internal/player"
 	"github.com/johndesu090/ari-media-engine/internal/recorder"
 	"github.com/johndesu090/ari-media-engine/internal/signaling"
@@ -117,6 +118,9 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		PublicURL:  cfg.Server.PublicURL,
 		LowLatency: cfg.Player.LowLatency,
 		DashJSURL:  cfg.Player.DashJSURL,
+		HLSJSURL:   cfg.Player.HLSJSURL,
+		P2PEnabled: cfg.P2P.Enabled,
+		P2PWsPath:  cfg.P2P.WSPath,
 		Signer:     signer,
 		Delivery:   deliveryOf,
 	})
@@ -241,6 +245,10 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		})
 	}
 
+	// Peer-assisted delivery tracker (always available; toggled at runtime).
+	p2pHub := p2p.NewHub(log, nil, cfg.P2P.MaxPeers)
+	p2pHub.SetEnabled(cfg.P2P.Enabled)
+
 	apiSrv := api.New(api.Options{
 		Store:      store,
 		Engine:     engine,
@@ -258,6 +266,7 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		HLSBase:  cfg.Player.HLSBase,
 		DashBase: cfg.Player.DashBase,
 		Cluster:  clusterMgr,
+		P2P:      p2pHub,
 	})
 
 	root := http.NewServeMux()
@@ -293,6 +302,14 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	if cfg.Recording.Enabled && cfg.Storage.Driver == "local" && cfg.Storage.LocalRoot != "" {
 		root.Handle("GET /recordings/", http.StripPrefix("/recordings/", http.FileServer(http.Dir(cfg.Storage.LocalRoot))))
 	}
+
+	// Peer-assisted delivery tracker and engine script.
+	p2pWSPath := cfg.P2P.WSPath
+	if p2pWSPath == "" {
+		p2pWSPath = "/p2p/ws"
+	}
+	root.HandleFunc("GET "+p2pWSPath, p2pHub.HandleWS)
+	root.Handle("GET /p2p/", http.StripPrefix("/p2p/", http.FileServer(http.Dir(filepath.Join("web", "p2p")))))
 
 	// Management dashboard (static assets).
 	registerDashboard(root, cfg.Server.DashboardDir)
