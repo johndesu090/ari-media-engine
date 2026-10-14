@@ -26,7 +26,7 @@ func filterGraph(renditions []Rendition) string {
 		fmt.Fprintf(&fb, "[v%d]", i)
 	}
 	for i, r := range renditions {
-		fmt.Fprintf(&fb, ";[v%d]scale=w=%d:h=%d:force_original_aspect_ratio=decrease[v%dout]", i, r.Width, r.Height, i)
+		fmt.Fprintf(&fb, ";[v%d]scale=w=%d:h=%d:force_original_aspect_ratio=decrease:force_divisible_by=2[v%dout]", i, r.Width, r.Height, i)
 	}
 	return fb.String()
 }
