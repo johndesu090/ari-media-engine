@@ -40,6 +40,7 @@ for the remaining enterprise features.
 | `internal/delivery`  | Embedding security: domain allow-list + CSP `frame-ancestors` + origin guard |
 | `internal/player`    | Embedded HTML5 player page and assets |
 | `internal/api`       | REST control plane (streams, security, stats) |
+| `internal/transcode` | FFmpeg ABR ladder: pipes FLV to FFmpeg and serves the HLS renditions |
 | `internal/webhook`   | Asynchronous lifecycle webhook dispatcher |
 | `internal/server`    | Composition root: wires every subsystem into one HTTP server |
 | `pkg/id`, `pkg/logger` | Identifier generation and structured logging |
@@ -83,6 +84,26 @@ Publish lifecycle (`OnPublish`/`OnUnpublish`) updates the control-plane
 Remaining in this track: SRT and RTSP demuxing, and AAC→Opus audio transcoding
 (WebRTC browsers do not negotiate AAC, so RTMP→WebRTC currently carries H.264
 video).
+
+## ABR transcoding
+
+`internal/transcode` runs an FFmpeg-based adaptive-bitrate ladder. When
+transcoding is enabled, the RTMP session also forwards every raw FLV tag to a
+transcode `Session` (the same `MediaSink` implements the optional `rtmp.FLVSink`
+interface). The session:
+
+1. Frames the tags into an FLV byte stream (`flvWriter`) and pipes it to
+   `ffmpeg -f flv -i pipe:0`.
+2. Splits and scales the video into N renditions, encodes each with libx264 at
+   the configured bitrate, and aligns keyframes (`-g`, `-sc_threshold 0`) so
+   players can switch cleanly.
+3. Muxes an HLS ladder: a master `index.m3u8` plus per-variant playlists and
+   `.ts` segments under `<output_dir>/<streamID>/`, served by the engine's
+   `/hls/` handler.
+
+Sessions start on RTMP publish and stop on unpublish; a transcode failure never
+drops the WebRTC stream (the extra sink is best-effort). The pipeline is
+video-only for now — audio muxing and DASH output belong to the HLS/DASH track.
 
 ## Embedding security
 
@@ -139,8 +160,8 @@ was chosen so the media path never needs to change.
 | Embed security + player | ✅ MVP | CSP + origin guard + embedded assets |
 | REST API + webhooks | ✅ MVP | API key auth, lifecycle events |
 | RTMP/SRT/RTSP media demux | 🟡 RTMP done | RTMP FLV→H.264→RTP works end-to-end; SRT/RTSP + AAC→Opus pending |
-| ABR transcoding | ⏳ | FFmpeg/GPU pipeline; player already consumes multi-variant HLS |
-| HLS/DASH packaging | ⏳ | Output dir + serving wired; segmenter pending |
+| ABR transcoding | ✅ MVP | FFmpeg FLV→HLS ladder, auto start/stop on publish |
+| HLS/DASH packaging | 🟡 HLS via ABR | Master + variant HLS produced by the ABR pipeline; DASH and audio muxing pending |
 | Redis clustering | ⏳ | `Store` interface ready for a Redis implementation |
 | Recording + S3 sync | ⏳ | Config present; recorder pending |
 | Trickle ICE / simulcast | ⏳ | Reduces setup latency, improves large-scale fan-out |

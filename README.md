@@ -4,20 +4,21 @@ An open-source, high-performance, ultra-low-latency live streaming engine that
 mirrors and extends the core enterprise features of Ant Media Server.
 
 - **Ultra-low latency:** WebRTC SFU with sub-second (target < 0.5 s) glass-to-glass delivery.
-- **Multi-protocol ingest:** WebRTC publish, plus RTMP / SRT / RTSP listeners.
+- **Multi-protocol ingest:** WebRTC publish, plus RTMP ingest (H.264) and SRT / RTSP listeners.
 - **Multi-protocol playback:** WebRTC first, with HLS / DASH fallback.
-- **Adaptive bitrate (ABR):** on-the-fly transcoding pipeline (FFmpeg/GPU) — see roadmap.
+- **Adaptive bitrate (ABR):** on-the-fly FFmpeg transcoding into a multi-rendition HLS ladder (1080p/720p/480p).
 - **Iframe embedding security:** strict CSP `frame-ancestors` plus a server-side origin guard, configurable globally or per stream.
 - **Built-in HTML5 player:** self-hosted, embeddable, zero-dependency, with automatic protocol selection.
 - **Control plane:** REST API, WebSocket signaling, lifecycle webhooks, and a management dashboard.
 - **Horizontal clustering:** Redis-backed node discovery and state (roadmap).
 
 > **Status:** Phase 1 MVP. The WebRTC SFU, signaling, REST control plane,
-> embedding security, player, dashboard and **RTMP ingest** are functional.
-> RTMP publishes are demuxed (FLV → H.264) and fanned out to WebRTC subscribers.
-> SRT/RTSP demuxing, AAC→Opus audio transcoding, ABR, HLS/DASH packaging and
-> Redis clustering are scaffolded with clear extension points (see
-> [`docs/architecture.md`](docs/architecture.md)).
+> embedding security, player, dashboard, **RTMP ingest** and **ABR transcoding**
+> are functional. RTMP publishes are demuxed (FLV → H.264) and fanned out to
+> WebRTC subscribers, and optionally transcoded into an HLS ABR ladder served at
+> `/hls/<streamID>/index.m3u8`. SRT/RTSP demuxing, AAC→Opus audio transcoding,
+> DASH packaging and Redis clustering are scaffolded with clear extension points
+> (see [`docs/architecture.md`](docs/architecture.md)).
 
 ---
 
@@ -77,6 +78,9 @@ overrides. Highlights:
 | `security.enforce_origin`            | `ARI_SECURITY_ENFORCE_ORIGIN`      | Reject non-allow-listed `Origin`/`Referer` server-side |
 | `player.title`                       | `ARI_PLAYER_TITLE`                 | Player/dashboard title |
 | `webhooks.enabled` / `webhooks.urls` | `ARI_WEBHOOKS_ENABLED`/`_URLS`     | Stream lifecycle webhooks |
+| `transcode.enabled`                  | `ARI_TRANSCODE_ENABLED`            | Enable the FFmpeg ABR → HLS pipeline |
+| `transcode.ffmpeg_path`              | `ARI_TRANSCODE_FFMPEG_PATH`        | ffmpeg executable (default `ffmpeg`) |
+| `transcode.output_dir`               | `ARI_TRANSCODE_OUTPUT_DIR`         | HLS output root, served at `/hls` |
 | `auth.enabled` / `auth.api_key`      | `ARI_AUTH_ENABLED`/`ARI_API_KEY`   | API key protection for control-plane routes |
 
 ## Configuring allowed embedding domains
@@ -173,6 +177,34 @@ on every major platform:
 Embeds should keep `allow="autoplay"` on the `<iframe>` so muted autoplay is
 permitted inside the frame.
 
+## Adaptive bitrate (ABR) transcoding
+
+Enable the FFmpeg pipeline to produce an HLS ABR ladder for every ingested
+stream:
+
+```yaml
+transcode:
+  enabled: true
+  renditions:
+    - { name: 1080p, width: 1920, height: 1080, bitrate: 5000k }
+    - { name: 720p,  width: 1280, height: 720,  bitrate: 2800k }
+    - { name: 480p,  width: 854,  height: 480,  bitrate: 1200k }
+```
+
+On publish, the raw FLV stream is piped to FFmpeg, which writes:
+
+```
+/hls/<streamID>/index.m3u8          # master (multi-variant) playlist
+/hls/<streamID>/0/stream.m3u8       # variant playlists + .ts segments
+/hls/<streamID>/1/stream.m3u8
+...
+```
+
+The built-in player consumes this automatically as its HLS fallback when WebRTC
+is unavailable. Transcode sessions start on publish and stop on unpublish, and
+`/api/v1/stats` reports the active count as `transcoding`. Requires `ffmpeg` on
+the host (bundled in the Docker image).
+
 ## REST API
 
 | Method | Path                                        | Description |
@@ -199,7 +231,7 @@ cmd/server (cmd/ari)   Main entry point
 internal/signaling     WebRTC signaling (WebSocket JSON protocol)
 internal/ingest        RTMP demux (FLV → H.264) + SRT/RTSP listeners
 internal/webrtc        Pion-based SFU
-internal/transcoding   ABR pipeline (roadmap)
+internal/transcode     FFmpeg ABR → HLS ladder
 internal/delivery      Embedding security (domain policy + CSP middleware)
 internal/player        Built-in HTML5 player + embedded assets
 internal/storage       Local / S3 recording storage (roadmap)

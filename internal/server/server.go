@@ -18,8 +18,10 @@ import (
 	"github.com/johndesu090/ari-media-engine/internal/config"
 	"github.com/johndesu090/ari-media-engine/internal/delivery"
 	"github.com/johndesu090/ari-media-engine/internal/ingest"
+	"github.com/johndesu090/ari-media-engine/internal/ingest/rtmp"
 	"github.com/johndesu090/ari-media-engine/internal/player"
 	"github.com/johndesu090/ari-media-engine/internal/signaling"
+	"github.com/johndesu090/ari-media-engine/internal/transcode"
 	"github.com/johndesu090/ari-media-engine/internal/webhook"
 	"github.com/johndesu090/ari-media-engine/internal/webrtc"
 	"github.com/johndesu090/ari-media-engine/pkg/id"
@@ -35,6 +37,7 @@ type Server struct {
 	policy *delivery.DomainPolicy
 	ingest *ingest.Manager
 
+	transcoder  *transcode.Manager
 	rtmpHandler ingest.Handler
 
 	http *http.Server
@@ -98,14 +101,39 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("server: player: %w", err)
 	}
 
+	// ABR transcoding pipeline (optional).
+	var transcoder *transcode.Manager
+	var newFLVSink func(streamKey string) (rtmp.FLVSink, error)
+	if cfg.Transcode.Enabled {
+		transcoder = transcode.New(transcode.Config{
+			FFmpegPath: cfg.Transcode.FFmpegPath,
+			OutputDir:  cfg.Transcode.OutputDir,
+			SegmentSec: cfg.Transcode.SegmentSec,
+			ListSize:   cfg.Transcode.ListSize,
+			Preset:     cfg.Transcode.Preset,
+			Renditions: toRenditions(cfg.Transcode.Renditions),
+		}, log)
+		newFLVSink = func(streamKey string) (rtmp.FLVSink, error) {
+			return transcoder.Start(streamKey)
+		}
+	}
+
+	transcodes := func() int {
+		if transcoder == nil {
+			return 0
+		}
+		return len(transcoder.Active())
+	}
+
 	apiSrv := api.New(api.Options{
-		Store:     store,
-		Engine:    engine,
-		Policy:    policy,
-		Logger:    log,
-		Webhooks:  webhooks,
-		Auth:      cfg.Auth,
-		StartedAt: time.Now().UTC(),
+		Store:      store,
+		Engine:     engine,
+		Policy:     policy,
+		Logger:     log,
+		Webhooks:   webhooks,
+		Auth:       cfg.Auth,
+		StartedAt:  time.Now().UTC(),
+		Transcodes: transcodes,
 	})
 
 	root := http.NewServeMux()
@@ -139,15 +167,21 @@ func New(cfg config.Config, log *slog.Logger) (*Server, error) {
 	handler := delivery.SecurityHeaders()(root)
 
 	return &Server{
-		cfg:    cfg,
-		log:    log,
-		engine: engine,
-		store:  store,
-		policy: policy,
-		ingest: ingest.New(log),
-		rtmpHandler: ingest.NewRTMPHandler(engine, log, ingest.RTMPHooks{
-			OnPublish:   func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusLive) },
-			OnUnpublish: func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusEnded) },
+		cfg:        cfg,
+		log:        log,
+		engine:     engine,
+		store:      store,
+		policy:     policy,
+		ingest:     ingest.New(log),
+		transcoder: transcoder,
+		rtmpHandler: ingest.NewRTMPHandler(ingest.RTMPOptions{
+			Engine: engine,
+			Logger: log,
+			Hooks: ingest.RTMPHooks{
+				OnPublish:   func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusLive) },
+				OnUnpublish: func(streamKey string) { upsertStream(store, streamKey, broadcast.StatusEnded) },
+			},
+			NewFLVSink: newFLVSink,
 		}),
 		http: &http.Server{
 			Addr:         cfg.Addr(),
@@ -220,6 +254,9 @@ func (s *Server) shutdown() {
 	if err := s.ingest.Close(); err != nil {
 		s.log.Warn("ingest shutdown", "err", err)
 	}
+	if s.transcoder != nil {
+		s.transcoder.StopAll()
+	}
 	s.engine.Shutdown()
 }
 
@@ -258,4 +295,20 @@ func upsertStream(store broadcast.Store, streamKey string, status broadcast.Stat
 		return
 	}
 	b.SetStatus(status)
+}
+
+// toRenditions converts configuration rungs into transcode renditions.
+func toRenditions(in []config.RenditionConfig) []transcode.Rendition {
+	out := make([]transcode.Rendition, 0, len(in))
+	for _, r := range in {
+		out = append(out, transcode.Rendition{
+			Name:    r.Name,
+			Width:   r.Width,
+			Height:  r.Height,
+			Bitrate: r.Bitrate,
+			MaxRate: r.MaxRate,
+			BufSize: r.BufSize,
+		})
+	}
+	return out
 }

@@ -21,24 +21,26 @@ import (
 
 // Options configures the API server.
 type Options struct {
-	Store     broadcast.Store
-	Engine    *webrtc.Engine
-	Policy    *delivery.DomainPolicy
-	Logger    *slog.Logger
-	Webhooks  *webhook.Dispatcher
-	Auth      config.AuthConfig
-	StartedAt time.Time
+	Store      broadcast.Store
+	Engine     *webrtc.Engine
+	Policy     *delivery.DomainPolicy
+	Logger     *slog.Logger
+	Webhooks   *webhook.Dispatcher
+	Auth       config.AuthConfig
+	StartedAt  time.Time
+	Transcodes func() int
 }
 
 // Server exposes the REST API.
 type Server struct {
-	store     broadcast.Store
-	engine    *webrtc.Engine
-	policy    *delivery.DomainPolicy
-	log       *slog.Logger
-	webhooks  *webhook.Dispatcher
-	auth      config.AuthConfig
-	startedAt time.Time
+	store      broadcast.Store
+	engine     *webrtc.Engine
+	policy     *delivery.DomainPolicy
+	log        *slog.Logger
+	webhooks   *webhook.Dispatcher
+	auth       config.AuthConfig
+	startedAt  time.Time
+	transcodes func() int
 }
 
 // New constructs the API server.
@@ -52,13 +54,14 @@ func New(opts Options) *Server {
 		startedAt = time.Now().UTC()
 	}
 	return &Server{
-		store:     opts.Store,
-		engine:    opts.Engine,
-		policy:    opts.Policy,
-		log:       log,
-		webhooks:  opts.Webhooks,
-		auth:      opts.Auth,
-		startedAt: startedAt,
+		store:      opts.Store,
+		engine:     opts.Engine,
+		policy:     opts.Policy,
+		log:        log,
+		webhooks:   opts.Webhooks,
+		auth:       opts.Auth,
+		startedAt:  startedAt,
+		transcodes: opts.Transcodes,
 	}
 }
 
@@ -134,6 +137,10 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 		}
 		viewers += b.ViewerCount()
 	}
+	transcoding := 0
+	if s.transcodes != nil {
+		transcoding = s.transcodes()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"uptimeSeconds": int(time.Since(s.startedAt).Seconds()),
 		"startedAt":     s.startedAt,
@@ -141,6 +148,7 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 		"streamsLive":   live,
 		"viewers":       viewers,
 		"engineStreams": s.engine.StreamCount(),
+		"transcoding":   transcoding,
 	})
 }
 

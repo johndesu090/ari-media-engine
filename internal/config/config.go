@@ -14,17 +14,18 @@ import (
 
 // Config is the root configuration document.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	WebRTC   WebRTCConfig   `yaml:"webrtc"`
-	Log      LogConfig      `yaml:"log"`
-	Storage  StorageConfig  `yaml:"storage"`
-	Cluster  ClusterConfig  `yaml:"cluster"`
-	Ingest   IngestConfig   `yaml:"ingest"`
-	HLS      HLSConfig      `yaml:"hls"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Security SecurityConfig `yaml:"security"`
-	Player   PlayerConfig   `yaml:"player"`
-	Webhooks WebhookConfig  `yaml:"webhooks"`
+	Server    ServerConfig    `yaml:"server"`
+	WebRTC    WebRTCConfig    `yaml:"webrtc"`
+	Log       LogConfig       `yaml:"log"`
+	Storage   StorageConfig   `yaml:"storage"`
+	Cluster   ClusterConfig   `yaml:"cluster"`
+	Ingest    IngestConfig    `yaml:"ingest"`
+	HLS       HLSConfig       `yaml:"hls"`
+	Auth      AuthConfig      `yaml:"auth"`
+	Security  SecurityConfig  `yaml:"security"`
+	Player    PlayerConfig    `yaml:"player"`
+	Webhooks  WebhookConfig   `yaml:"webhooks"`
+	Transcode TranscodeConfig `yaml:"transcode"`
 }
 
 // ServerConfig controls the HTTP management/API server.
@@ -128,6 +129,28 @@ type WebhookConfig struct {
 	Secret  string   `yaml:"secret"`
 }
 
+// TranscodeConfig controls the FFmpeg ABR ladder that produces HLS renditions
+// for each ingested stream.
+type TranscodeConfig struct {
+	Enabled    bool              `yaml:"enabled"`
+	FFmpegPath string            `yaml:"ffmpeg_path"`
+	OutputDir  string            `yaml:"output_dir"`
+	SegmentSec int               `yaml:"segment_sec"`
+	ListSize   int               `yaml:"list_size"`
+	Preset     string            `yaml:"preset"`
+	Renditions []RenditionConfig `yaml:"renditions"`
+}
+
+// RenditionConfig is a single rung of the ABR ladder.
+type RenditionConfig struct {
+	Name    string `yaml:"name"`
+	Width   int    `yaml:"width"`
+	Height  int    `yaml:"height"`
+	Bitrate string `yaml:"bitrate"`
+	MaxRate string `yaml:"maxrate"`
+	BufSize string `yaml:"bufsize"`
+}
+
 // Default returns a fully-populated configuration with sane development values.
 func Default() Config {
 	return Config{
@@ -175,6 +198,19 @@ func Default() Config {
 			LowLatency: true,
 		},
 		Webhooks: WebhookConfig{Enabled: false},
+		Transcode: TranscodeConfig{
+			Enabled:    false,
+			FFmpegPath: "ffmpeg",
+			OutputDir:  "./data/hls",
+			SegmentSec: 2,
+			ListSize:   6,
+			Preset:     "veryfast",
+			Renditions: []RenditionConfig{
+				{Name: "1080p", Width: 1920, Height: 1080, Bitrate: "5000k", MaxRate: "5350k", BufSize: "7500k"},
+				{Name: "720p", Width: 1280, Height: 720, Bitrate: "2800k", MaxRate: "2996k", BufSize: "4200k"},
+				{Name: "480p", Width: 854, Height: 480, Bitrate: "1200k", MaxRate: "1284k", BufSize: "1800k"},
+			},
+		},
 	}
 }
 
@@ -219,6 +255,10 @@ func applyEnv(cfg *Config) {
 	setBool(&cfg.Webhooks.Enabled, "ARI_WEBHOOKS_ENABLED")
 	setStringSlice(&cfg.Webhooks.URLs, "ARI_WEBHOOK_URLS")
 	setString(&cfg.Webhooks.Secret, "ARI_WEBHOOK_SECRET")
+	setBool(&cfg.Transcode.Enabled, "ARI_TRANSCODE_ENABLED")
+	setString(&cfg.Transcode.FFmpegPath, "ARI_TRANSCODE_FFMPEG_PATH")
+	setString(&cfg.Transcode.OutputDir, "ARI_TRANSCODE_OUTPUT_DIR")
+	setInt(&cfg.Transcode.SegmentSec, "ARI_TRANSCODE_SEGMENT_SEC")
 }
 
 func setStringSlice(dst *[]string, key string) {
@@ -275,6 +315,17 @@ func (c Config) Validate() error {
 	}
 	if c.Player.WSPath == "" || !strings.HasPrefix(c.Player.WSPath, "/") {
 		return fmt.Errorf("config: player.ws_path %q must start with /", c.Player.WSPath)
+	}
+	if c.Transcode.Enabled {
+		if c.Transcode.FFmpegPath == "" {
+			return fmt.Errorf("config: transcode.ffmpeg_path is required when transcode is enabled")
+		}
+		if len(c.Transcode.Renditions) == 0 {
+			return fmt.Errorf("config: transcode.enabled requires at least one rendition")
+		}
+		if c.Transcode.SegmentSec <= 0 {
+			return fmt.Errorf("config: transcode.segment_sec must be positive")
+		}
 	}
 	return nil
 }

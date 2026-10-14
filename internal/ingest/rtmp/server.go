@@ -27,6 +27,14 @@ type AudioSink interface {
 	WriteAudio(frame []byte, ptsMillis uint32, config bool) error
 }
 
+// FLVSink is optionally implemented by a MediaSink that wants the raw FLV tag
+// bodies (for recording or FFmpeg-based transcoding) in addition to demuxed
+// media.
+type FLVSink interface {
+	WriteFLVTag(tagType uint8, timestamp uint32, data []byte) error
+	Close()
+}
+
 // SinkFactory opens a media sink when a publisher starts.
 type SinkFactory interface {
 	Open(streamKey string) (MediaSink, error)
@@ -126,9 +134,28 @@ func (s *session) handle(msg Message) error {
 	case MsgCommandAMF0:
 		return s.handleCommand(msg)
 	case MsgVideo:
-		return s.handleVideo(msg)
+		if err := s.handleVideo(msg); err != nil {
+			return err
+		}
+		return s.forwardFLV(msg)
 	case MsgAudio:
-		return s.handleAudio(msg)
+		if err := s.handleAudio(msg); err != nil {
+			return err
+		}
+		return s.forwardFLV(msg)
+	case MsgDataAMF0:
+		return s.forwardFLV(msg)
+	}
+	return nil
+}
+
+// forwardFLV forwards a raw FLV tag body to the sink when it implements FLVSink.
+func (s *session) forwardFLV(msg Message) error {
+	if !s.publishing || s.sink == nil {
+		return nil
+	}
+	if fs, ok := s.sink.(FLVSink); ok {
+		return fs.WriteFLVTag(msg.Type, msg.Timestamp, msg.Payload)
 	}
 	return nil
 }
