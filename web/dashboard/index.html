@@ -150,8 +150,10 @@
           <button class="ghost" id="reset-abr-btn">Reset</button>
         </div>
         <p class="muted" style="margin-top:.7rem;">When off, streams are remuxed with no re-encoding so
-          playback follows your OBS/encoder settings exactly (lowest CPU). Changes apply to new publishes.
-          Active sessions: <span id="abr-active">0</span>.</p>
+          playback follows your OBS/encoder settings exactly (lowest CPU). In remux mode the segment
+          length follows your encoder's keyframe interval, so set the OBS keyframe interval to your
+          <code>hls_time</code> (e.g. 1s) to keep latency low; the ABR ladder forces it. Changes apply to
+          new publishes. Active sessions: <span id="abr-active">0</span>.</p>
       </div>
 
       <div class="panel">

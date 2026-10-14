@@ -33,6 +33,7 @@ func filterGraph(renditions []Rendition) string {
 
 // videoEncodeArgs returns the per-rendition video map/encode options.
 func videoEncodeArgs(cfg Config) []string {
+	seg := strconv.Itoa(cfg.SegmentSec)
 	var args []string
 	for i, r := range cfg.Renditions {
 		args = append(args,
@@ -40,6 +41,9 @@ func videoEncodeArgs(cfg Config) []string {
 			fmt.Sprintf("-c:v:%d", i), "libx264",
 			fmt.Sprintf("-b:v:%d", i), r.Bitrate,
 			fmt.Sprintf("-preset:v:%d", i), cfg.Preset,
+			// Force keyframes exactly on segment boundaries (fps-independent) so
+			// transcoded segments match hls_time and latency stays predictable.
+			fmt.Sprintf("-force_key_frames:v:%d", i), "expr:gte(t,n_forced*"+seg+")",
 		)
 		if r.MaxRate != "" {
 			args = append(args, fmt.Sprintf("-maxrate:v:%d", i), r.MaxRate)

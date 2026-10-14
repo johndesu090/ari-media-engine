@@ -90,7 +90,33 @@ func (p *PlaybackServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
+	if ct := contentTypeFor(fi.Name()); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+}
+
+// contentTypeFor returns the explicit MIME type for HLS/DASH artifacts. Go's
+// default extension table does not know .m3u8/.ts, and Safari refuses to play
+// HLS unless the playlist is served as application/vnd.apple.mpegurl and the
+// segments as video/mp2t.
+func contentTypeFor(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
+	case ".ts":
+		return "video/mp2t"
+	case ".mpd":
+		return "application/dash+xml"
+	case ".m4s", ".mp4", ".m4v":
+		return "video/mp4"
+	case ".m4a":
+		return "audio/mp4"
+	case ".vtt":
+		return "text/vtt"
+	default:
+		return ""
+	}
 }
 
 func withinBase(base, full string) bool {

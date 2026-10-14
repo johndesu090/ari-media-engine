@@ -27,7 +27,6 @@
     hls: null,
     dash: null,
     mode: "none",
-    lowLatency: cfg.lowLatency !== false,
     tokenTimer: null,
     triedHLS: false,
     triedDASH: false
@@ -100,9 +99,15 @@
     if (!url) { nextFallback("no HLS source"); return; }
 
     if (window.Hls && window.Hls.isSupported()) {
+      // Keep the player close to the live edge: start ~2 segments behind it and
+      // speed up (up to 1.5x) when it drifts further, so latency stays low.
       var hlsConfig = {
-        lowLatencyMode: state.lowLatency,
-        liveSyncDurationCount: state.lowLatency ? 2 : 3
+        lowLatencyMode: true,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 5,
+        maxLiveSyncPlaybackRate: 1.5,
+        backBufferLength: 0,
+        enableWorker: true
       };
       if (p2p) { hlsConfig.loader = p2p.hlsLoader(window.Hls); }
       var hls = new window.Hls(hlsConfig);
